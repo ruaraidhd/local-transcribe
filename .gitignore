@@ -1,0 +1,15 @@
+.env
+settings.toml
+.venv/
+__pycache__/
+*.pyc
+audio/
+output/
+*.wav
+*.mp3
+*.m4a
+*.mp4
+*.flac
+*.ogg
+*.webm
+*.aac

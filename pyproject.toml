@@ -1,0 +1,10 @@
+[project]
+name = "local-transcribe"
+version = "0.1.0"
+description = "Local audio transcription + diarisation via WhisperX"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "whisperx>=3.3",
+    "toga>=0.4",
+]

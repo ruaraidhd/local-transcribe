@@ -1,0 +1,13 @@
+# Copy this file to settings.toml and fill in your HuggingFace token.
+#
+# 1. Create a HuggingFace account and token at:
+#    https://huggingface.co/settings/tokens  (a "Read" token is enough)
+# 2. Accept the model terms on these pages (one-off, while logged in):
+#    https://huggingface.co/pyannote/speaker-diarization-3.1
+#    https://huggingface.co/pyannote/segmentation-3.0
+
+hf_token = "hf_YOUR_TOKEN_HERE"
+
+# Optional: override default folders. Defaults shown.
+# inbox  = "~/Transcripts/in"
+# outbox = "~/Transcripts/out"
