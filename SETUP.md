@@ -70,23 +70,48 @@ error, the HF token or terms acceptance is wrong — revisit step 1.
 
 ## 6. Wrap as a Mac .app (Platypus)
 
-Install Platypus (free) from https://sveinbjorn.org/platypus or via Homebrew:
+Install Platypus:
 
 ```bash
 brew install --cask platypus
 ```
 
-Launch Platypus and configure:
+Stage the supporting files (normally done via `sudo` installer; this avoids
+sudo by writing to a user-owned path):
 
-- **App Name**: `Local Transcribe`
-- **Script Path**: `~/Applications/local-transcribe/launch.sh`
-- **Interface**: `None` (Toga draws its own window)
-- **Identifier**: `com.rdobson.local_transcribe` (or any reverse-DNS you like)
-- **Remain running after execution**: ✅
-- Optional: drop a custom icon onto the icon well.
+```bash
+mkdir -p /usr/local/share/platypus
+cd /Applications/Platypus.app/Contents/Resources
+base64 -d -i ScriptExec.b64 > /usr/local/share/platypus/ScriptExec
+cp -r MainMenu.nib /usr/local/share/platypus/
+chmod 755 /usr/local/share/platypus/ScriptExec
+```
 
-Click **Create App** → save `Local Transcribe.app` to `/Applications`.
-Double-click to launch.
+Build the app (run from the project directory):
+
+```bash
+cd ~/Applications/local-transcribe
+/Applications/Platypus.app/Contents/Resources/platypus_clt \
+    -a "Local Transcribe" \
+    -o None \
+    -p /bin/bash \
+    -I com.rdobson.local-transcribe \
+    -V 0.1.0 \
+    "$(pwd)/launch.sh" \
+    "/Applications/Local Transcribe.app"
+```
+
+Double-click `Local Transcribe.app` in `/Applications`. Because it's
+unsigned, macOS may block the first launch ("cannot be verified"). Either:
+
+- Right-click the app → **Open** → **Open** in the dialog, OR
+- `xattr -d com.apple.quarantine "/Applications/Local Transcribe.app"`
+
+Subsequent launches are unblocked.
+
+> Building on the same machine where it'll run avoids any quarantine
+> attribute — recommended. Don't transfer the built `.app` between Macs
+> unless you're prepared to strip quarantine on the receiving end.
 
 ## Updating later
 
