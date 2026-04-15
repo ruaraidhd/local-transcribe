@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import logging
 import subprocess
+import time
 import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -25,6 +27,7 @@ from transcribe import (
     SETTINGS_PATH,
     load_pipeline,
     load_settings,
+    save_settings,
     transcribe_one,
 )
 
@@ -41,6 +44,14 @@ LANGUAGES = [
     ("Chinese", "zh"),
     ("Russian", "ru"),
     ("Arabic", "ar"),
+]
+
+MODEL_OPTIONS = [
+    "large-v3-turbo",
+    "large-v3",
+    "distil-large-v3",
+    "medium",
+    "small",
 ]
 
 log = logging.getLogger("local_transcribe")
@@ -102,30 +113,73 @@ class TranscribeApp(toga.App):
         self.busy = False
         self._stop_flag = False
 
+        # Stage ticker state
+        self.current_stage: str | None = None
+        self.stage_started: float | None = None
+        self._last_progress_pct: float | None = None
+
         # Queue data model: list of QueueItem, paths used for dedup
         self.queue: list[QueueItem] = []
         self._queue_paths: set[Path] = set()
 
         root = toga.Box(style=Pack(direction=COLUMN, padding=12, flex=1))
 
+        # ---- Config group ----
+        config_group = toga.Box(style=Pack(direction=COLUMN))
+
         # Output folder row
         out_row = toga.Box(style=Pack(direction=ROW, padding_bottom=8))
-        self.outbox_label = toga.Label(f"Output: {self.outbox}", style=Pack(flex=1, padding_top=6))
+        self.outbox_label = toga.Label(
+            f"Output folder: {self.outbox}",
+            style=Pack(flex=1, padding_top=6),
+        )
         out_row.add(self.outbox_label)
-        out_row.add(toga.Button("Change...", on_press=self.on_pick_outbox))
-        root.add(out_row)
+        out_row.add(toga.Button("Change...", on_press=self.on_pick_outbox,
+                                style=Pack(padding_right=6)))
+        out_row.add(toga.Button("Open", on_press=self.on_open_outputs))
+        config_group.add(out_row)
 
-        # Queue table
+        # Settings row: Model | Language | Speakers
+        settings_row = toga.Box(style=Pack(direction=ROW, padding_bottom=8))
+        settings_row.add(toga.Label("Model:", style=Pack(padding_right=6, padding_top=6)))
+        default_model = self.settings.get("model", "large-v3-turbo")
+        if default_model not in MODEL_OPTIONS:
+            default_model = "large-v3-turbo"
+        self.model_select = toga.Selection(
+            items=MODEL_OPTIONS,
+            style=Pack(width=180, padding_right=16),
+        )
+        self.model_select.value = default_model
+        self.model_select.on_change = self.on_model_changed
+        settings_row.add(self.model_select)
+
+        settings_row.add(toga.Label("Language:", style=Pack(padding_right=6, padding_top=6)))
+        self.language_select = toga.Selection(
+            items=[label for label, _ in LANGUAGES], style=Pack(width=160, padding_right=16)
+        )
+        settings_row.add(self.language_select)
+
+        settings_row.add(toga.Label("Speakers:", style=Pack(padding_right=6, padding_top=6)))
+        self.speakers_input = toga.TextInput(
+            placeholder="auto", style=Pack(width=60)
+        )
+        settings_row.add(self.speakers_input)
+        config_group.add(settings_row)
+
+        root.add(config_group)
+
+        # ---- Queue group ----
+        queue_group = toga.Box(style=Pack(direction=COLUMN, padding_top=12))
+
         self.table = toga.Table(
             headings=["File", "Size", "Status"],
             accessors=["file", "size", "status"],
             multiple_select=True,
             style=Pack(flex=1, padding_bottom=4),
         )
-        root.add(self.table)
+        queue_group.add(self.table)
 
-        # Queue management buttons
-        queue_buttons = toga.Box(style=Pack(direction=ROW, padding_bottom=8))
+        queue_buttons = toga.Box(style=Pack(direction=ROW, padding_bottom=4))
         queue_buttons.add(toga.Button(
             "Add files...", on_press=self.on_add_files,
             style=Pack(padding_right=6),
@@ -141,49 +195,44 @@ class TranscribeApp(toga.App):
         queue_buttons.add(toga.Button(
             "Clear completed", on_press=self.on_clear_completed,
         ))
-        root.add(queue_buttons)
+        queue_group.add(queue_buttons)
 
-        # Controls row (speakers, language)
-        controls = toga.Box(style=Pack(direction=ROW, padding_bottom=8))
-        controls.add(toga.Label("Speakers:", style=Pack(padding_right=6, padding_top=6)))
-        self.speakers_input = toga.TextInput(
-            placeholder="auto", style=Pack(width=60, padding_right=16)
-        )
-        controls.add(self.speakers_input)
-        controls.add(toga.Label("Language:", style=Pack(padding_right=6, padding_top=6)))
-        self.language_select = toga.Selection(
-            items=[label for label, _ in LANGUAGES], style=Pack(width=160)
-        )
-        controls.add(self.language_select)
-        root.add(controls)
+        root.add(queue_group)
 
-        # Action buttons
-        buttons = toga.Box(style=Pack(direction=ROW, padding_bottom=8))
+        # ---- Actions group ----
+        actions_group = toga.Box(style=Pack(direction=ROW, padding_top=12, padding_bottom=8))
         self.go_button = toga.Button(
             "Transcribe all", on_press=self.on_transcribe,
-            style=Pack(padding_right=8, flex=1),
+            style=Pack(flex=1, padding_right=8),
         )
-        buttons.add(self.go_button)
+        actions_group.add(self.go_button)
         self.stop_button = toga.Button(
             "Stop", on_press=self.on_stop,
-            style=Pack(padding_right=8),
         )
         self.stop_button.enabled = False
-        buttons.add(self.stop_button)
-        buttons.add(toga.Button("Open outputs", on_press=self.on_open_outputs,
-                                style=Pack(padding_right=8)))
-        buttons.add(toga.Button("Open logs", on_press=self.on_open_logs,
-                                style=Pack(padding_right=8)))
-        buttons.add(toga.Button("Copy diagnostics", on_press=self.on_copy_diagnostics))
-        root.add(buttons)
+        actions_group.add(self.stop_button)
+        root.add(actions_group)
 
-        self.status = toga.Label("Ready.", style=Pack(padding_bottom=6))
-        root.add(self.status)
+        # ---- Status group ----
+        status_group = toga.Box(style=Pack(direction=COLUMN, padding_top=12, flex=1))
+
+        self.status_label = toga.Label("Now: Ready.", style=Pack(padding_bottom=6))
+        status_group.add(self.status_label)
 
         self.log_view = toga.MultilineTextInput(readonly=True, style=Pack(flex=1, height=200))
-        root.add(self.log_view)
+        status_group.add(self.log_view)
 
-        self.main_window = toga.MainWindow(title=self.formal_name, size=(760, 720))
+        # Footer row: Open logs + Copy diagnostics
+        footer_row = toga.Box(style=Pack(direction=ROW, padding_top=4))
+        footer_row.add(toga.Box(style=Pack(flex=1)))  # spacer
+        footer_row.add(toga.Button("Open logs", on_press=self.on_open_logs,
+                                   style=Pack(padding_right=6)))
+        footer_row.add(toga.Button("Copy diagnostics", on_press=self.on_copy_diagnostics))
+        status_group.add(footer_row)
+
+        root.add(status_group)
+
+        self.main_window = toga.MainWindow(title=self.formal_name, size=(760, 780))
         self.main_window.content = root
         self.main_window.show()
 
@@ -193,14 +242,22 @@ class TranscribeApp(toga.App):
         log.addHandler(ui_handler)
 
         log_startup_diagnostics(self.settings, None, self.outbox)
+
+        # Start background tasks
         self.loop.create_task(self.load_model_background())
+        self.loop.create_task(self._stage_ticker())
 
     # ---- UI helpers ----
+
+    def _set_status(self, text: str) -> None:
+        self.status_label.text = text
 
     def _ui_log(self, line: str, status: str | None) -> None:
         self.log_view.value = (self.log_view.value + line + "\n") if self.log_view.value else line + "\n"
         if status is not None:
-            self.status.text = status
+            # Don't overwrite live stage ticker with log messages while a stage is active
+            if self.current_stage is None:
+                self._set_status(f"Now: {status}")
 
     def refresh_table(self) -> None:
         self.table.data = [
@@ -225,6 +282,51 @@ class TranscribeApp(toga.App):
             (self.outbox / f"{stem}{ext}").exists()
             for ext in (".txt", ".srt", ".json")
         )
+
+    # ---- Stage ticker ----
+
+    async def _stage_ticker(self) -> None:
+        while True:
+            await asyncio.sleep(2)
+            self._update_status_ticker()
+
+    def _update_status_ticker(self) -> None:
+        if self.current_stage is None or self.stage_started is None:
+            return
+        elapsed = time.monotonic() - self.stage_started
+        mm = int(elapsed) // 60
+        ss = int(elapsed) % 60
+        elapsed_str = f"{mm:02d}:{ss:02d}"
+        if self._last_progress_pct is not None:
+            self._set_status(
+                f"Now: {self.current_stage} — {self._last_progress_pct:.0f}% ({elapsed_str} elapsed)"
+            )
+        else:
+            self._set_status(f"Now: {self.current_stage} — {elapsed_str} elapsed")
+
+    def _on_stage_start(self, stage: str) -> None:
+        """Called from worker thread — must use call_soon_threadsafe."""
+        def _set():
+            self.current_stage = stage
+            self.stage_started = time.monotonic()
+            self._last_progress_pct = None
+            self._update_status_ticker()
+        self.loop.call_soon_threadsafe(_set)
+
+    def _on_stage_end(self, stage: str) -> None:
+        """Called from worker thread — must use call_soon_threadsafe."""
+        def _clear():
+            self.current_stage = None
+            self.stage_started = None
+            self._last_progress_pct = None
+        self.loop.call_soon_threadsafe(_clear)
+
+    def _on_progress(self, pct: float) -> None:
+        """Called from worker thread with progress 0-100."""
+        def _update():
+            self._last_progress_pct = pct
+            self._update_status_ticker()
+        self.loop.call_soon_threadsafe(_update)
 
     # ---- Folder / file pickers ----
 
@@ -276,13 +378,10 @@ class TranscribeApp(toga.App):
         selected = self.table.selection
         if not selected:
             return
-        # selection may be a single row or list
         if not isinstance(selected, list):
             selected = [selected]
-        # Build set of file names to remove (only non-Running)
         to_remove_names = set()
         for row in selected:
-            # Find matching queue item by file name
             for item in self.queue:
                 if item.path.name == row.file and item.status != "Running":
                     to_remove_names.add(item.path)
@@ -326,11 +425,8 @@ class TranscribeApp(toga.App):
         )
 
     def save_settings(self) -> None:
-        lines = [
-            f'hf_token = "{self.settings["hf_token"]}"',
-            f'outbox = "{self.outbox}"',
-        ]
-        SETTINGS_PATH.write_text("\n".join(lines) + "\n")
+        self.settings["outbox"] = str(self.outbox)
+        save_settings(self.settings)
 
     async def on_pick_outbox(self, widget) -> None:
         chosen = await self._pick_folder("Choose output folder", self.outbox)
@@ -338,7 +434,7 @@ class TranscribeApp(toga.App):
             return
         self.outbox = chosen
         self.outbox.mkdir(parents=True, exist_ok=True)
-        self.outbox_label.text = f"Output: {self.outbox}"
+        self.outbox_label.text = f"Output folder: {self.outbox}"
         log.info("Outbox changed to %s", self.outbox)
         self.save_settings()
 
@@ -347,15 +443,63 @@ class TranscribeApp(toga.App):
         self.stop_button.enabled = False
         log.info("Stop requested — will finish current file then halt.")
 
+    # ---- Model selector ----
+
+    async def on_model_changed(self, widget) -> None:
+        if self.busy:
+            return
+        new_model = self.model_select.value
+        if not new_model:
+            return
+        log.info("Switching model to %s...", new_model)
+        self.go_button.enabled = False
+        self.model_select.enabled = False
+
+        # Drop old pipeline
+        if self.pipeline is not None:
+            del self.pipeline
+            self.pipeline = None
+            gc.collect()
+
+        # Persist new model choice
+        self.settings["model"] = new_model
+        self.save_settings()
+
+        # Reload in background
+        self.loop.create_task(self._reload_model_task(new_model))
+
+    async def _reload_model_task(self, model_name: str) -> None:
+        try:
+            self.pipeline = await asyncio.to_thread(
+                load_pipeline, self.settings["hf_token"], model_name, "cpu", "int8",
+            )
+            log.info("Model %s ready.", model_name)
+        except Exception:
+            log.exception("Model load failed for %s", model_name)
+        finally:
+            if not self.busy:
+                self.go_button.enabled = True
+            self.model_select.enabled = True
+
     # ---- Workflow ----
 
     async def load_model_background(self) -> None:
+        model_name = self.settings.get("model", "large-v3-turbo")
+        if model_name not in MODEL_OPTIONS:
+            model_name = "large-v3-turbo"
+        self.go_button.enabled = False
+        self.model_select.enabled = False
         try:
             self.pipeline = await asyncio.to_thread(
-                load_pipeline, self.settings["hf_token"], "large-v3", "cpu", "int8",
+                load_pipeline, self.settings["hf_token"], model_name, "cpu", "int8",
             )
+            log.info("Model %s ready.", model_name)
         except Exception:
             log.exception("Model load failed")
+        finally:
+            if not self.busy:
+                self.go_button.enabled = True
+            self.model_select.enabled = True
 
     def selected_language(self) -> str | None:
         label = self.language_select.value
@@ -404,6 +548,7 @@ class TranscribeApp(toga.App):
         self._stop_flag = False
         self.go_button.enabled = False
         self.stop_button.enabled = True
+        self.model_select.enabled = False
 
         # Reset previously-Failed items so a fresh click retries them.
         for item in self.queue:
@@ -413,7 +558,8 @@ class TranscribeApp(toga.App):
 
         queued_files = [i.path for i in self.queue if i.status == "Queued"]
         log_batch_start(queued_files)
-        log.info("Settings: speakers=%s language=%s", speakers, language)
+        log.info("Settings: speakers=%s language=%s model=%s",
+                 speakers, language, self.model_select.value)
 
         try:
             while not self._stop_flag:
@@ -421,7 +567,6 @@ class TranscribeApp(toga.App):
                 if item is None:
                     break
 
-                # Check output collision before running
                 if self._check_output_collision(item):
                     item.status = "Skipped"
                     self.refresh_table()
@@ -436,6 +581,10 @@ class TranscribeApp(toga.App):
                         transcribe_one,
                         item.path, self.outbox, self.pipeline,
                         language, speakers, speakers,
+                        self.settings,
+                        self._on_stage_start,
+                        self._on_stage_end,
+                        self._on_progress,
                     )
                     item.status = "Done"
                 except Exception:
@@ -453,6 +602,11 @@ class TranscribeApp(toga.App):
             self._stop_flag = False
             self.go_button.enabled = True
             self.stop_button.enabled = False
+            self.model_select.enabled = True
+            self.current_stage = None
+            self.stage_started = None
+            self._last_progress_pct = None
+            self._set_status("Now: Ready.")
 
 
 def main() -> TranscribeApp:

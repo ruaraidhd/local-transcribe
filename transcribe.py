@@ -12,6 +12,7 @@ import time
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 from logging_setup import (
     hint_for_pyannote_error,
@@ -44,6 +45,32 @@ def load_settings() -> dict:
     if not token or token.startswith("hf_YOUR"):
         sys.exit(f"hf_token not set in {SETTINGS_PATH.name}")
     return s
+
+
+def save_settings(settings: dict) -> None:
+    """Persist hf_token, outbox, model, and device_mps to settings.toml."""
+    lines = [f'hf_token = "{settings["hf_token"]}"']
+    if "outbox" in settings:
+        lines.append(f'outbox = "{settings["outbox"]}"')
+    if "model" in settings:
+        lines.append(f'model = "{settings["model"]}"')
+    if "device_mps" in settings:
+        val = "true" if settings["device_mps"] else "false"
+        lines.append(f"device_mps = {val}")
+    SETTINGS_PATH.write_text("\n".join(lines) + "\n")
+
+
+def accel_device(settings: dict) -> str:
+    """Return 'mps' if device_mps is enabled and available, else 'cpu'."""
+    if settings.get("device_mps") is not True:
+        return "cpu"
+    try:
+        import torch
+        if torch.backends.mps.is_available() and torch.backends.mps.is_built():
+            return "mps"
+    except Exception:
+        pass
+    return "cpu"
 
 
 def collect_inputs(path: Path) -> list[Path]:
@@ -91,7 +118,7 @@ def write_txt(segments: list[dict], path: Path) -> None:
 
 def load_pipeline(
     hf_token: str,
-    model_name: str = "large-v3",
+    model_name: str = "large-v3-turbo",
     device: str = "cpu",
     compute_type: str = "int8",
 ) -> Pipeline:
@@ -110,9 +137,16 @@ def transcribe_one(
     language: str | None = None,
     min_speakers: int | None = None,
     max_speakers: int | None = None,
+    settings: dict | None = None,
+    on_stage_start: Callable[[str], None] | None = None,
+    on_stage_end: Callable[[str], None] | None = None,
+    on_progress: Callable[[float], None] | None = None,
 ) -> dict:
     import whisperx
     from whisperx.diarize import DiarizationPipeline
+
+    _settings = settings or {}
+    dev = accel_device(_settings)
 
     log.info("=== %s ===", audio_path.name)
     t_total = time.perf_counter()
@@ -121,39 +155,85 @@ def transcribe_one(
     audio = whisperx.load_audio(str(audio_path))
     log.debug("Load audio: %.1fs", time.perf_counter() - t0)
 
+    # --- Transcribe ---
+    if on_stage_start:
+        on_stage_start("Transcribing")
     log.info("Transcribing...")
     t0 = time.perf_counter()
-    result = pipeline.model.transcribe(audio, batch_size=8, language=language)
+    result = pipeline.model.transcribe(
+        audio, batch_size=8, language=language,
+        progress_callback=on_progress if on_progress else None,
+    )
     lang = result["language"]
     log.info("Transcribe: %.1fs (language: %s, %d segments)",
              time.perf_counter() - t0, lang, len(result["segments"]))
+    if on_stage_end:
+        on_stage_end("Transcribing")
 
+    # --- Align ---
+    if on_stage_start:
+        on_stage_start("Aligning")
     log.info("Aligning...")
     t0 = time.perf_counter()
-    align_model, align_meta = whisperx.load_align_model(
-        language_code=lang, device=pipeline.device
-    )
-    result = whisperx.align(
-        result["segments"], align_model, align_meta, audio, pipeline.device,
-        return_char_alignments=False,
-    )
-    del align_model
-    log.info("Align: %.1fs", time.perf_counter() - t0)
 
+    def _do_align(device: str) -> dict:
+        align_model, align_meta = whisperx.load_align_model(
+            language_code=lang, device=device
+        )
+        aligned = whisperx.align(
+            result["segments"], align_model, align_meta, audio, device,
+            return_char_alignments=False,
+        )
+        del align_model
+        return aligned
+
+    if dev == "mps":
+        try:
+            result = _do_align("mps")
+        except Exception as e:
+            log.warning("Align on MPS failed (%s), retrying on CPU", e)
+            result = _do_align("cpu")
+    else:
+        result = _do_align("cpu")
+
+    log.info("Align: %.1fs", time.perf_counter() - t0)
+    if on_stage_end:
+        on_stage_end("Aligning")
+
+    # --- Diarise ---
+    if on_stage_start:
+        on_stage_start("Diarising")
     log.info("Diarising (speakers=%s-%s)...", min_speakers, max_speakers)
     t0 = time.perf_counter()
-    try:
-        diarize_model = DiarizationPipeline(token=pipeline.hf_token, device=pipeline.device)
-        diarize_segments = diarize_model(
-            audio, min_speakers=min_speakers, max_speakers=max_speakers
+
+    def _do_diarize(device: str) -> object:
+        diarize_model = DiarizationPipeline(token=pipeline.hf_token, device=device)
+        return diarize_model(
+            audio,
+            min_speakers=min_speakers,
+            max_speakers=max_speakers,
+            progress_callback=on_progress if on_progress else None,
         )
+
+    try:
+        if dev == "mps":
+            try:
+                diarize_segments = _do_diarize("mps")
+            except Exception as e:
+                log.warning("Diarize on MPS failed (%s), retrying on CPU", e)
+                diarize_segments = _do_diarize("cpu")
+        else:
+            diarize_segments = _do_diarize("cpu")
     except Exception as e:
         hint = hint_for_pyannote_error(e)
         if hint:
             log.error("%s", hint)
         raise
+
     result = whisperx.assign_word_speakers(diarize_segments, result)
     log.info("Diarise: %.1fs", time.perf_counter() - t0)
+    if on_stage_end:
+        on_stage_end("Diarising")
 
     stem = audio_path.stem
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -171,7 +251,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("input", type=Path, help="Audio file or directory of audio files")
     ap.add_argument("-o", "--output", type=Path, default=Path("output"))
-    ap.add_argument("--model", default="large-v3")
+    ap.add_argument("--model", default="large-v3-turbo")
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--compute-type", default="int8")
     ap.add_argument("--language", default=None)
@@ -192,7 +272,10 @@ def main() -> None:
 
     log_batch_start(inputs)
     pipeline = load_pipeline(
-        settings["hf_token"], args.model, args.device, args.compute_type,
+        settings["hf_token"],
+        args.model,
+        args.device,
+        args.compute_type,
     )
     failures = 0
     for audio_path in inputs:
@@ -200,6 +283,7 @@ def main() -> None:
             transcribe_one(
                 audio_path, args.output, pipeline,
                 args.language, args.min_speakers, args.max_speakers,
+                settings=settings,
             )
         except Exception:
             failures += 1

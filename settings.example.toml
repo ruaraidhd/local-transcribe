@@ -11,3 +11,10 @@ hf_token = "hf_YOUR_TOKEN_HERE"
 # Optional: override default folders. Defaults shown.
 # inbox  = "~/Transcripts/in"
 # outbox = "~/Transcripts/out"
+
+# Optional: override the Whisper model. Default shown.
+# model = "large-v3-turbo"
+
+# Optional: use MPS (Apple Silicon GPU) for align and diarise steps.
+# Whisper always runs on CPU (ctranslate2 has no MPS backend).
+# device_mps = false
