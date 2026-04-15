@@ -17,6 +17,21 @@ for dir in "${CANDIDATES[@]}"; do
     if [[ -f "$dir/pyproject.toml" && -f "$dir/gui.py" ]]; then
         cd "$dir"
         export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+
+        if ! command -v ffmpeg >/dev/null 2>&1; then
+            osascript <<'OSA'
+display alert "Local Transcribe" ¬
+    message "ffmpeg is not installed.
+
+Open Terminal and run:
+    brew install ffmpeg
+
+Then launch Local Transcribe again." ¬
+    as critical
+OSA
+            exit 1
+        fi
+
         exec uv run python gui.py
     fi
 done

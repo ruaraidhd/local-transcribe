@@ -376,9 +376,14 @@ class TranscribeApp(toga.App):
             return None
 
     def _next_queued(self) -> QueueItem | None:
-        """Return the first item with status Queued or Failed, or None."""
+        """Return the first item with status Queued, or None.
+
+        Failed items are only retried on a subsequent batch (see on_transcribe,
+        which resets Failed -> Queued at batch start). Retrying within the same
+        batch would loop forever on a persistent failure.
+        """
         for item in self.queue:
-            if item.status in ("Queued", "Failed"):
+            if item.status == "Queued":
                 return item
         return None
 
@@ -400,7 +405,13 @@ class TranscribeApp(toga.App):
         self.go_button.enabled = False
         self.stop_button.enabled = True
 
-        queued_files = [i.path for i in self.queue if i.status in ("Queued", "Failed")]
+        # Reset previously-Failed items so a fresh click retries them.
+        for item in self.queue:
+            if item.status == "Failed":
+                item.status = "Queued"
+        self.refresh_table()
+
+        queued_files = [i.path for i in self.queue if i.status == "Queued"]
         log_batch_start(queued_files)
         log.info("Settings: speakers=%s language=%s", speakers, language)
 
