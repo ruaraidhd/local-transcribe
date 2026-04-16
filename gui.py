@@ -207,6 +207,77 @@ class API:
         except Exception as e:
             return {"error": str(e)}
 
+    def rate_transcript(self, filename, stars):
+        """Store a star rating (1-5) for a transcript."""
+        feedback_dir = Path.home() / "Documents" / "Verbatim"
+        feedback_dir.mkdir(parents=True, exist_ok=True)
+        feedback_file = feedback_dir / "feedback.json"
+
+        data = {}
+        if feedback_file.exists():
+            data = json.loads(feedback_file.read_text())
+
+        if "ratings" not in data:
+            data["ratings"] = {}
+        data["ratings"][filename] = {
+            "stars": stars,
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        }
+        feedback_file.write_text(json.dumps(data, indent=2))
+        return {"status": "saved"}
+
+    def submit_feedback(self, category, text, overall_stars, include_diagnostics):
+        """Save feedback locally and optionally prepare an email."""
+        import urllib.parse
+
+        feedback_dir = Path.home() / "Documents" / "Verbatim"
+        feedback_dir.mkdir(parents=True, exist_ok=True)
+        feedback_file = feedback_dir / "feedback.json"
+
+        data = {}
+        if feedback_file.exists():
+            data = json.loads(feedback_file.read_text())
+
+        if "feedback" not in data:
+            data["feedback"] = []
+
+        entry = {
+            "category": category,
+            "text": text,
+            "overall_stars": overall_stars,
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "app_version": "0.2.0",
+        }
+
+        if include_diagnostics:
+            try:
+                diag_path = create_diagnostics_zip(SETTINGS_PATH)
+                entry["diagnostics_path"] = str(diag_path)
+            except Exception:
+                pass
+
+        data["feedback"].append(entry)
+        feedback_file.write_text(json.dumps(data, indent=2))
+
+        # Return mailto link for optional email
+        subject = urllib.parse.quote(f"Verbatim feedback: {category}")
+        body_lines = [
+            f"Category: {category}",
+            f"Overall rating: {'★' * overall_stars + '☆' * (5 - overall_stars) if overall_stars else 'not rated'}",
+            "",
+            text,
+            "",
+            "---",
+            "Sent from Verbatim v0.2.0",
+        ]
+        if include_diagnostics and "diagnostics_path" in entry:
+            body_lines.append(f"Diagnostics saved to: {entry['diagnostics_path']}")
+            body_lines.append("(Please attach this file to the email)")
+        body = urllib.parse.quote("\n".join(body_lines))
+        mailto = f"mailto:support@southlondonscientific.co.uk?subject={subject}&body={body}"
+
+        return {"status": "saved", "mailto": mailto}
+
     def _push(self, event, data):
         """Push an event to the JS frontend."""
         js = f"window.onPythonEvent({json.dumps(event)}, {json.dumps(data)})"

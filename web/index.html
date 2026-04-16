@@ -238,6 +238,63 @@
     font-size: 13px; color: #6e6e73; padding: 10px 12px;
     background: #f9f9fb; border-radius: 8px; text-align: center;
   }
+
+  /* Star rating component */
+  .star-rating { display: inline-flex; gap: 2px; align-items: center; }
+  .star-rating .star {
+    cursor: pointer; line-height: 1; transition: transform 0.1s;
+    user-select: none; -webkit-user-select: none;
+  }
+  .star-rating .star:hover { transform: scale(1.15); }
+  .star-rating.size-sm .star { font-size: 18px; }
+  .star-rating.size-md .star { font-size: 22px; }
+  .star-rating.size-lg .star { font-size: 24px; }
+  .star-empty { color: #d2d2d7; }
+  .star-filled { color: #FFB800; }
+  .star-hover { color: #ffd060; }
+
+  /* Viewer header rating row */
+  .viewer-header-row {
+    display: flex; align-items: flex-start; justify-content: space-between;
+    gap: 12px; margin-bottom: 2px;
+  }
+  .viewer-rating-wrap { display: flex; align-items: center; gap: 6px; flex-shrink: 0; padding-top: 2px; }
+  .viewer-rating-label { font-size: 12px; color: #8e8e93; }
+
+  /* Feedback modal */
+  .feedback-modal .modal-card { width: 480px; }
+  .feedback-form-group { margin-bottom: 16px; }
+  .feedback-form-group label {
+    display: block; font-size: 13px; font-weight: 500; color: #3a3a3c; margin-bottom: 6px;
+  }
+  .feedback-textarea {
+    width: 100%; min-height: 100px; padding: 10px 12px;
+    border: 1px solid #d2d2d7; border-radius: 8px;
+    font-family: inherit; font-size: 14px; color: #1d1d1f; resize: vertical;
+    background: #fff; box-sizing: border-box;
+  }
+  .feedback-textarea:focus { outline: none; border-color: #007AFF; }
+  .feedback-select {
+    appearance: none; -webkit-appearance: none;
+    background: #f2f2f7 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%238e8e93' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E") no-repeat right 10px center;
+    border: 1px solid #d2d2d7; border-radius: 8px; padding: 8px 32px 8px 12px;
+    font-size: 14px; font-family: inherit; color: #1d1d1f; cursor: pointer; width: 100%;
+  }
+  .feedback-select:focus { outline: none; border-color: #007AFF; }
+  .feedback-diag-row { display: flex; align-items: flex-start; gap: 10px; }
+  .feedback-diag-row input[type=checkbox] { margin-top: 2px; flex-shrink: 0; width: 16px; height: 16px; cursor: pointer; accent-color: #007AFF; }
+  .feedback-diag-text { font-size: 13px; color: #3a3a3c; line-height: 1.4; }
+  .feedback-diag-hint { font-size: 12px; color: #8e8e93; margin-top: 3px; }
+  .feedback-actions { display: flex; gap: 8px; margin-top: 20px; }
+  .feedback-actions .btn-primary { flex: 1; padding: 10px; font-size: 14px; }
+  .feedback-actions .btn-secondary { flex: 1; justify-content: center; }
+
+  /* Privacy notice */
+  .privacy-notice {
+    font-size: 12px; color: #8e8e93; padding: 10px 12px;
+    background: #f9f9fb; border-radius: 8px; line-height: 1.5;
+  }
+  .privacy-notice strong { color: #6e6e73; }
 </style>
 </head>
 <body>
@@ -299,6 +356,7 @@
     <div class="footer">
       <div class="footer-links">
         <button class="btn-link" onclick="openSettings()">&#9881; Settings</button>
+        <button class="btn-link" onclick="openFeedback()">&#9993; Send feedback</button>
       </div>
     </div>
   </div>
@@ -333,6 +391,7 @@
     <div class="footer">
       <div class="footer-links">
         <button class="btn-link" onclick="openSettings()">&#9881; Settings</button>
+        <button class="btn-link" onclick="openFeedback()">&#9993; Send feedback</button>
       </div>
     </div>
   </div>
@@ -355,7 +414,13 @@
       </div>
     </div>
     <div class="card">
-      <div class="viewer-filename" id="viewer-filename"></div>
+      <div class="viewer-header-row">
+        <div class="viewer-filename" id="viewer-filename" style="flex:1; min-width:0;"></div>
+        <div class="viewer-rating-wrap">
+          <span class="viewer-rating-label">Rate:</span>
+          <div class="star-rating size-md" id="viewer-star-rating"></div>
+        </div>
+      </div>
       <div class="speakers-bar" id="speakers-bar"></div>
       <div class="transcript" id="transcript-content"></div>
     </div>
@@ -390,10 +455,72 @@
     </div>
 
     <div class="settings-section">
+      <div class="settings-section-title">Feedback</div>
+      <div class="settings-row">
+        <span class="settings-row-label">Tell us what you think</span>
+        <button class="btn-secondary" onclick="closeSettings(); openFeedback();">Send feedback</button>
+      </div>
+    </div>
+
+    <div class="settings-section">
+      <div class="settings-section-title">Privacy</div>
+      <div class="privacy-notice">
+        <strong>Verbatim processes all audio on your device.</strong> No recordings or transcripts are ever sent anywhere. Feedback and ratings are saved locally in ~/Documents/Verbatim/. If you choose to email feedback, diagnostic logs may include filenames and your macOS username — never transcript content.
+      </div>
+    </div>
+
+    <div class="settings-section">
       <div class="settings-section-title">About</div>
       <div class="settings-about">
         Verbatim v0.2.0 &bull; parakeet-mlx + pyannote &bull; Built by SLS
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- FEEDBACK MODAL -->
+<div class="modal-backdrop feedback-modal" id="feedback-modal" onclick="handleFeedbackBackdropClick(event)">
+  <div class="modal-card">
+    <button class="modal-close" onclick="closeFeedback()" title="Close">&times;</button>
+    <div class="modal-title">Send Feedback</div>
+
+    <div class="feedback-form-group">
+      <label for="feedback-category">Category</label>
+      <select class="feedback-select" id="feedback-category">
+        <option value="Transcript quality">Transcript quality</option>
+        <option value="Bug report">Bug report</option>
+        <option value="Feature request">Feature request</option>
+        <option value="Other">Other</option>
+      </select>
+    </div>
+
+    <div class="feedback-form-group">
+      <label for="feedback-text">What happened?</label>
+      <textarea class="feedback-textarea" id="feedback-text" placeholder="Tell us what happened..."></textarea>
+    </div>
+
+    <div class="feedback-form-group">
+      <label>Overall rating (optional)</label>
+      <div class="star-rating size-lg" id="feedback-overall-stars"></div>
+    </div>
+
+    <div class="feedback-form-group">
+      <div class="feedback-diag-row">
+        <input type="checkbox" id="feedback-include-diag">
+        <div>
+          <div class="feedback-diag-text">Include diagnostic information</div>
+          <div class="feedback-diag-hint">Includes: macOS version, app version, processing times, and filenames (NOT transcript content or audio). Your file paths contain your username.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="privacy-notice" style="margin-bottom:16px;">
+      <strong>Privacy:</strong> Verbatim processes all audio on your device. No recordings or transcripts are ever sent anywhere. Feedback and ratings are saved locally in ~/Documents/Verbatim/. If you choose to email feedback, diagnostic logs may include filenames and your macOS username — never transcript content.
+    </div>
+
+    <div class="feedback-actions">
+      <button class="btn-primary" onclick="saveFeedback()">Save feedback</button>
+      <button class="btn-secondary" style="justify-content:center;" onclick="emailFeedback()">Email feedback</button>
     </div>
   </div>
 </div>
@@ -710,6 +837,12 @@ function showResultsScreen(elapsed, stopped) {
     var actions = document.createElement('div');
     actions.className = 'result-actions';
 
+    // Star rating (inline, small)
+    var starWrap = document.createElement('div');
+    starWrap.className = 'star-rating size-sm';
+    starWrap.style.marginRight = '4px';
+    buildStars(starWrap, filename, null, _ratings[filename] || 0);
+
     var viewBtn = document.createElement('button');
     viewBtn.className = 'btn-secondary';
     viewBtn.textContent = 'View';
@@ -732,6 +865,7 @@ function showResultsScreen(elapsed, stopped) {
 
     dropWrap.appendChild(exportBtn);
     dropWrap.appendChild(menu);
+    actions.appendChild(starWrap);
     actions.appendChild(viewBtn);
     actions.appendChild(dropWrap);
     row.appendChild(nameSpan);
@@ -799,6 +933,13 @@ function buildExportMenu(id, filename) {
 function openViewer(filename) {
   state.currentViewer = filename;
   document.getElementById('viewer-filename').textContent = filename;
+
+  // Init viewer star rating
+  var viewerStars = document.getElementById('viewer-star-rating');
+  buildStars(viewerStars, filename, function(v) {
+    _ratings[filename] = v;
+  }, _ratings[filename] || 0);
+
   window.pywebview.api.get_transcript(filename).then(function(data) {
     renderViewer(filename, data);
     showScreen('screen-viewer');
@@ -975,6 +1116,131 @@ function showToast(msg) {
 
 function safeid(str) {
   return String(str).replace(/[^a-z0-9]/gi, '_');
+}
+
+// ---- Star rating component ----
+// ratings cache: filename -> stars (1-5)
+var _ratings = {};
+// feedback form overall stars
+var _feedbackOverallStars = 0;
+
+/**
+ * Build a star-rating widget into `container`.
+ * @param {HTMLElement} container  - element with class star-rating
+ * @param {string|null} filename   - if set, clicking calls rate_transcript API
+ * @param {function|null} onChange - called with new star count (for feedback form)
+ * @param {number} initial         - pre-filled value (0 = unrated)
+ */
+function buildStars(container, filename, onChange, initial) {
+  while (container.firstChild) container.removeChild(container.firstChild);
+  var current = initial || 0;
+
+  for (var i = 1; i <= 5; i++) {
+    (function(val) {
+      var s = document.createElement('span');
+      s.className = 'star ' + (val <= current ? 'star-filled' : 'star-empty');
+      s.textContent = val <= current ? '\u2605' : '\u2606';
+      s.setAttribute('data-val', String(val));
+
+      s.addEventListener('mouseenter', function() {
+        refreshStarDisplay(container, val, 'hover');
+      });
+      s.addEventListener('mouseleave', function() {
+        refreshStarDisplay(container, current, 'normal');
+      });
+      s.addEventListener('click', function() {
+        current = val;
+        refreshStarDisplay(container, current, 'normal');
+        if (filename) {
+          if (window.pywebview) {
+            window.pywebview.api.rate_transcript(filename, current).catch(function(e) {
+              console.error('rate_transcript error', e);
+            });
+          }
+          _ratings[filename] = current;
+        }
+        if (onChange) onChange(current);
+      });
+
+      container.appendChild(s);
+    })(i);
+  }
+}
+
+function refreshStarDisplay(container, upTo, mode) {
+  var stars = container.querySelectorAll('.star');
+  stars.forEach(function(s, idx) {
+    var val = idx + 1;
+    if (mode === 'hover') {
+      if (val <= upTo) {
+        s.className = 'star star-hover';
+        s.textContent = '\u2605';
+      } else {
+        s.className = 'star star-empty';
+        s.textContent = '\u2606';
+      }
+    } else {
+      if (val <= upTo) {
+        s.className = 'star star-filled';
+        s.textContent = '\u2605';
+      } else {
+        s.className = 'star star-empty';
+        s.textContent = '\u2606';
+      }
+    }
+  });
+}
+
+// ---- Feedback modal ----
+function openFeedback() {
+  _feedbackOverallStars = 0;
+  document.getElementById('feedback-text').value = '';
+  document.getElementById('feedback-category').value = 'Transcript quality';
+  document.getElementById('feedback-include-diag').checked = false;
+  var overallEl = document.getElementById('feedback-overall-stars');
+  buildStars(overallEl, null, function(v) { _feedbackOverallStars = v; }, 0);
+  document.getElementById('feedback-modal').classList.add('open');
+}
+
+function closeFeedback() {
+  document.getElementById('feedback-modal').classList.remove('open');
+}
+
+function handleFeedbackBackdropClick(e) {
+  if (e.target === document.getElementById('feedback-modal')) closeFeedback();
+}
+
+function saveFeedback() {
+  if (!window.pywebview) { showToast('Feedback saved locally.'); closeFeedback(); return; }
+  var category = document.getElementById('feedback-category').value;
+  var text = document.getElementById('feedback-text').value.trim();
+  var includeDiag = document.getElementById('feedback-include-diag').checked;
+  window.pywebview.api.submit_feedback(category, text, _feedbackOverallStars, includeDiag).then(function(result) {
+    if (result && result.status === 'saved') {
+      showToast('Feedback saved to ~/Documents/Verbatim/');
+      closeFeedback();
+    }
+  }).catch(function(e) {
+    showToast('Could not save feedback.');
+    console.error(e);
+  });
+}
+
+function emailFeedback() {
+  if (!window.pywebview) return;
+  var category = document.getElementById('feedback-category').value;
+  var text = document.getElementById('feedback-text').value.trim();
+  var includeDiag = document.getElementById('feedback-include-diag').checked;
+  window.pywebview.api.submit_feedback(category, text, _feedbackOverallStars, includeDiag).then(function(result) {
+    if (result && result.mailto) {
+      showToast('Feedback saved. Opening email...');
+      closeFeedback();
+      window.location.href = result.mailto;
+    }
+  }).catch(function(e) {
+    showToast('Could not prepare email.');
+    console.error(e);
+  });
 }
 
 // Settings modal
