@@ -1,6 +1,7 @@
 .env
 settings.toml
 .venv/
+models/
 __pycache__/
 *.pyc
 audio/

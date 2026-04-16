@@ -4,9 +4,15 @@ from __future__ import annotations
 import json
 import gc
 import logging
+import os
 import threading
 import time
 from pathlib import Path
+
+# Use bundled models if available (eliminates HF token requirement).
+_models_dir = Path(__file__).parent / "models"
+if _models_dir.exists():
+    os.environ["HF_HOME"] = str(_models_dir)
 
 import webview
 

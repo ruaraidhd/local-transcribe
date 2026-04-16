@@ -7,7 +7,14 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
+from pathlib import Path as _Path
+
+# Use bundled models if available (eliminates HF token requirement).
+_models_dir = _Path(__file__).parent / "models"
+if _models_dir.exists():
+    os.environ["HF_HOME"] = str(_models_dir)
 import time
 import tomllib
 from dataclasses import dataclass
