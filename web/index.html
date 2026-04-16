@@ -1,0 +1,908 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Local Transcribe</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+    background: #f5f5f7;
+    color: #1d1d1f;
+    font-size: 15px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .container {
+    max-width: 680px;
+    margin: 0 auto;
+    padding: 32px 24px 48px;
+  }
+
+  .header { text-align: center; margin-bottom: 32px; }
+  .header h1 { font-size: 22px; font-weight: 600; letter-spacing: -0.3px; color: #1d1d1f; margin-bottom: 6px; }
+  .header p { font-size: 14px; color: #6e6e73; line-height: 1.4; }
+
+  .card {
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 0 0 1px rgba(0,0,0,0.04);
+    padding: 20px;
+    margin-bottom: 16px;
+  }
+
+  .file-area {
+    border: 2px dashed #d2d2d7;
+    border-radius: 8px;
+    padding: 28px 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+    min-height: 100px;
+  }
+  .file-area:hover, .file-area.has-files { border-color: #007AFF; background: #f0f6ff; }
+  .file-area.empty .file-area-hint { display: block; }
+  .file-area.has-files .file-area-hint { display: none; }
+  .file-area-hint { color: #6e6e73; font-size: 14px; pointer-events: none; }
+  .file-area-hint .icon { font-size: 28px; margin-bottom: 8px; display: block; }
+  .file-area-hint strong { color: #007AFF; }
+
+  .file-list { list-style: none; text-align: left; margin-top: 4px; }
+  .file-list li {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 6px 0; border-bottom: 1px solid #f2f2f2; font-size: 14px;
+  }
+  .file-list li:last-child { border-bottom: none; }
+  .file-name { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 8px; color: #1d1d1f; }
+  .file-remove {
+    background: none; border: none; cursor: pointer; color: #8e8e93;
+    font-size: 16px; line-height: 1; padding: 2px 4px; border-radius: 4px; flex-shrink: 0; transition: color 0.1s;
+  }
+  .file-remove:hover { color: #ff3b30; }
+  .file-add-more { margin-top: 10px; font-size: 13px; color: #007AFF; cursor: pointer; text-align: center; padding: 4px; }
+  .file-add-more:hover { text-decoration: underline; }
+
+  .field-row { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
+  .field-label { font-size: 14px; font-weight: 500; color: #1d1d1f; white-space: nowrap; }
+  .field-hint { font-size: 12px; color: #8e8e93; margin-top: 4px; }
+
+  select {
+    appearance: none; -webkit-appearance: none;
+    background: #f2f2f7 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%238e8e93' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E") no-repeat right 10px center;
+    border: 1px solid #d2d2d7; border-radius: 8px; padding: 7px 32px 7px 12px;
+    font-size: 14px; font-family: inherit; color: #1d1d1f; cursor: pointer; min-width: 90px;
+  }
+  select:focus { outline: none; border-color: #007AFF; }
+
+  .btn-primary {
+    display: block; width: 100%; padding: 14px;
+    background: #007AFF; color: #fff; border: none; border-radius: 10px;
+    font-family: inherit; font-size: 16px; font-weight: 600; cursor: pointer;
+    transition: background 0.15s, opacity 0.15s; letter-spacing: -0.1px;
+  }
+  .btn-primary:hover:not(:disabled) { background: #0066dd; }
+  .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .btn-secondary {
+    display: inline-flex; align-items: center; padding: 7px 14px;
+    background: none; border: 1.5px solid #d2d2d7; border-radius: 8px;
+    font-family: inherit; font-size: 13px; font-weight: 500; color: #3a3a3c;
+    cursor: pointer; transition: border-color 0.1s, background 0.1s; gap: 4px;
+  }
+  .btn-secondary:hover { border-color: #007AFF; color: #007AFF; background: #f0f6ff; }
+
+  .btn-danger {
+    display: inline-flex; align-items: center; padding: 7px 14px;
+    background: none; border: 1.5px solid #d2d2d7; border-radius: 8px;
+    font-family: inherit; font-size: 13px; font-weight: 500; color: #3a3a3c;
+    cursor: pointer; transition: border-color 0.1s, background 0.1s;
+  }
+  .btn-danger:hover { border-color: #ff3b30; color: #ff3b30; }
+
+  .btn-link {
+    background: none; border: none; color: #007AFF; font-family: inherit; font-size: 14px;
+    cursor: pointer; padding: 0; display: inline-flex; align-items: center; gap: 4px;
+  }
+  .btn-link:hover { text-decoration: underline; }
+
+  .status-badge {
+    display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: #6e6e73;
+    padding: 6px 12px; background: #f2f2f7; border-radius: 20px; margin-bottom: 16px;
+  }
+  .status-badge .dot { width: 8px; height: 8px; border-radius: 50%; background: #8e8e93; animation: pulse 2s infinite; }
+  .status-badge.loading .dot { background: #ff9500; }
+  .status-badge.ready .dot { background: #34c759; animation: none; }
+  .status-badge.error .dot { background: #ff3b30; animation: none; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+  .progress-header { font-size: 17px; font-weight: 600; color: #1d1d1f; margin-bottom: 20px; }
+  .file-progress-item { margin-bottom: 18px; }
+  .file-progress-name { font-size: 14px; font-weight: 500; color: #1d1d1f; margin-bottom: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .progress-track { height: 6px; background: #e5e5ea; border-radius: 3px; overflow: hidden; margin-bottom: 5px; }
+  .progress-fill { height: 100%; background: #007AFF; border-radius: 3px; transition: width 0.3s ease; width: 0%; }
+  .progress-fill.done { background: #34c759; width: 100% !important; }
+  .progress-fill.error { background: #ff3b30; }
+  .progress-label { font-size: 12px; color: #8e8e93; }
+  .progress-label.error-label { color: #ff3b30; }
+
+  .elapsed-row { display: flex; justify-content: space-between; align-items: center; margin-top: 20px; padding-top: 16px; border-top: 1px solid #f2f2f2; }
+  .elapsed-time { font-size: 14px; color: #6e6e73; font-variant-numeric: tabular-nums; }
+
+  .results-header { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .results-checkmark { width: 28px; height: 28px; background: #34c759; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-size: 14px; flex-shrink: 0; }
+  .results-title { font-size: 17px; font-weight: 600; }
+  .results-subtitle { font-size: 13px; color: #6e6e73; margin-bottom: 20px; margin-left: 38px; }
+
+  .result-file-row { display: flex; align-items: center; padding: 12px 0; border-bottom: 1px solid #f2f2f2; gap: 10px; }
+  .result-file-row:last-child { border-bottom: none; }
+  .result-file-name { flex: 1; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
+  .result-actions { display: flex; gap: 8px; flex-shrink: 0; }
+
+  .dropdown-wrap { position: relative; display: inline-block; }
+  .dropdown-menu {
+    display: none; position: absolute; right: 0; top: calc(100% + 4px);
+    background: #fff; border: 1px solid #d2d2d7; border-radius: 10px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.12); min-width: 190px; z-index: 100; overflow: hidden;
+  }
+  .dropdown-menu.open { display: block; }
+  .dropdown-menu button {
+    display: block; width: 100%; text-align: left; padding: 10px 16px;
+    border: none; background: none; font-family: inherit; font-size: 14px; color: #1d1d1f; cursor: pointer;
+  }
+  .dropdown-menu button:hover { background: #f2f2f7; }
+  .dropdown-menu .menu-section {
+    padding: 6px 16px 4px; font-size: 11px; font-weight: 600; color: #8e8e93;
+    text-transform: uppercase; letter-spacing: 0.5px; border-top: 1px solid #f2f2f2; margin-top: 2px;
+  }
+  .dropdown-menu .menu-section:first-child { border-top: none; margin-top: 0; }
+
+  .viewer-nav { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+  .viewer-filename { font-size: 16px; font-weight: 600; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  .speakers-bar { display: flex; flex-wrap: wrap; gap: 8px; padding: 14px 0; border-bottom: 1px solid #f2f2f2; margin-bottom: 16px; align-items: center; }
+  .speakers-label { font-size: 12px; font-weight: 600; color: #8e8e93; text-transform: uppercase; letter-spacing: 0.5px; margin-right: 4px; }
+  .speaker-chip { display: inline-flex; align-items: center; gap: 4px; background: #f2f2f7; border-radius: 20px; padding: 4px 12px; font-size: 13px; }
+  .speaker-chip input {
+    border: none; background: transparent; font-family: inherit; font-size: 13px; color: #1d1d1f;
+    width: auto; min-width: 80px; max-width: 160px; padding: 0;
+  }
+  .speaker-chip input:focus { outline: none; color: #007AFF; }
+
+  .transcript { max-height: 420px; overflow-y: auto; padding-right: 4px; }
+  .transcript::-webkit-scrollbar { width: 4px; }
+  .transcript::-webkit-scrollbar-track { background: transparent; }
+  .transcript::-webkit-scrollbar-thumb { background: #d2d2d7; border-radius: 2px; }
+
+  .segment { margin-bottom: 20px; }
+  .segment-meta { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+  .segment-time { font-size: 12px; color: #8e8e93; font-variant-numeric: tabular-nums; letter-spacing: 0.2px; }
+  .segment-speaker { font-size: 12px; font-weight: 600; color: #007AFF; letter-spacing: 0.2px; text-transform: uppercase; }
+  .segment-warn { font-size: 11px; color: #ff9500; background: #fff5e6; border-radius: 4px; padding: 1px 6px; margin-left: 2px; }
+  .segment-text { font-size: 15px; color: #1d1d1f; line-height: 1.6; }
+
+  .footer { text-align: center; padding-top: 20px; }
+  .footer-links { display: flex; justify-content: center; gap: 16px; margin-top: 8px; }
+
+  .hidden { display: none !important; }
+  .text-muted { color: #8e8e93; }
+  .mt-16 { margin-top: 16px; }
+
+  .toast {
+    position: fixed; bottom: 24px; left: 50%;
+    transform: translateX(-50%) translateY(80px);
+    background: #1d1d1f; color: #fff; padding: 10px 20px; border-radius: 20px;
+    font-size: 13px; font-weight: 500; z-index: 999; opacity: 0;
+    transition: transform 0.25s ease, opacity 0.25s ease; pointer-events: none; white-space: nowrap;
+  }
+  .toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+</style>
+</head>
+<body>
+
+<div class="container" id="app">
+
+  <!-- SCREEN: SETUP -->
+  <div id="screen-setup">
+    <div class="header">
+      <h1>Local Transcribe</h1>
+      <p>Transcribe and identify speakers in your recordings — privately, on-device.</p>
+    </div>
+
+    <div style="display:flex; justify-content:center; margin-bottom:20px;">
+      <div class="status-badge loading" id="model-status-badge">
+        <span class="dot"></span>
+        <span id="model-status-text">Loading model...</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="file-area empty" id="file-area" onclick="handleFileAreaClick()">
+        <div class="file-area-hint">
+          <span class="icon">&#127897;</span>
+          <span><strong>Click to add recordings</strong></span>
+          <br>
+          <span style="font-size:12px; margin-top:4px; display:inline-block;">m4a, mp3, wav, mp4, flac and more</span>
+        </div>
+        <ul class="file-list" id="file-list"></ul>
+        <div class="file-add-more hidden" id="file-add-more" onclick="event.stopPropagation(); handleFileAreaClick()">
+          + Add more recordings
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="field-row">
+        <label class="field-label" for="speaker-select">Number of speakers</label>
+        <select id="speaker-select">
+          <option value="">Auto</option>
+          <option value="2">2</option>
+          <option value="3">3</option>
+          <option value="4">4</option>
+          <option value="5">5</option>
+          <option value="6">6</option>
+          <option value="7">7</option>
+          <option value="8">8</option>
+          <option value="9">9</option>
+          <option value="10">10</option>
+        </select>
+      </div>
+      <div class="field-hint">Set this if you know how many speakers — it improves accuracy.</div>
+    </div>
+
+    <button class="btn-primary" id="btn-transcribe" disabled onclick="startTranscription()">
+      Transcribe
+    </button>
+
+    <div class="footer">
+      <div class="footer-links">
+        <button class="btn-link" onclick="openLogs()">View logs</button>
+        <button class="btn-link" onclick="copyDiagnostics()">Save diagnostics</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- SCREEN: PROCESSING -->
+  <div id="screen-processing" class="hidden">
+    <div class="card">
+      <div class="progress-header" id="processing-header">Transcribing...</div>
+      <div id="progress-items"></div>
+      <div class="elapsed-row">
+        <span class="elapsed-time">Time elapsed: <span id="elapsed-display">00:00</span></span>
+        <button class="btn-danger" onclick="stopTranscription()">Stop</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- SCREEN: RESULTS -->
+  <div id="screen-results" class="hidden">
+    <div class="card">
+      <div class="results-header">
+        <div class="results-checkmark">&#10003;</div>
+        <div class="results-title" id="results-title">Recordings transcribed</div>
+      </div>
+      <div class="results-subtitle" id="results-subtitle">Total time: --</div>
+      <div id="results-list"></div>
+    </div>
+    <div class="mt-16" style="text-align:center;">
+      <button class="btn-primary" style="max-width:300px; margin:0 auto;" onclick="showSetup()">
+        Transcribe more
+      </button>
+    </div>
+    <div class="footer">
+      <div class="footer-links">
+        <button class="btn-link" onclick="openLogs()">View logs</button>
+        <button class="btn-link" onclick="copyDiagnostics()">Save diagnostics</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- SCREEN: VIEWER -->
+  <div id="screen-viewer" class="hidden">
+    <div class="viewer-nav">
+      <button class="btn-link" onclick="showResults()">&#8592; Back</button>
+      <div class="dropdown-wrap">
+        <button class="btn-secondary" onclick="toggleDropdown('viewer-export-menu')">Export &#9662;</button>
+        <div class="dropdown-menu" id="viewer-export-menu">
+          <div class="menu-section">Export as</div>
+          <button onclick="exportCurrent('plain')">Plain text</button>
+          <button onclick="exportCurrent('srt')">SRT subtitles</button>
+          <div class="menu-section">For QDA software</div>
+          <button onclick="exportCurrent('maxqda')">For MAXQDA</button>
+          <button onclick="exportCurrent('atlasti')">For ATLAS.ti</button>
+          <button onclick="exportCurrent('nvivo')">For NVivo</button>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="viewer-filename" id="viewer-filename"></div>
+      <div class="speakers-bar" id="speakers-bar"></div>
+      <div class="transcript" id="transcript-content"></div>
+    </div>
+  </div>
+
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// State
+var state = {
+  files: [],
+  modelReady: false,
+  batchStartTime: null,
+  elapsedInterval: null,
+  batchTotal: 0,
+  completedFiles: [],
+  failedFiles: [],
+  currentViewer: null,
+};
+
+var STAGE_LABELS = {
+  'Transcribing': 'Transcribing',
+  'Diarising': 'Identifying speakers',
+  'Assigning speakers': 'Assigning speakers',
+};
+
+// Screen management
+function showScreen(id) {
+  var screens = ['screen-setup', 'screen-processing', 'screen-results', 'screen-viewer'];
+  screens.forEach(function(s) {
+    document.getElementById(s).classList.toggle('hidden', s !== id);
+  });
+}
+
+function showSetup() {
+  state.files = [];
+  state.completedFiles = [];
+  state.failedFiles = [];
+  renderFileList();
+  showScreen('screen-setup');
+}
+
+function showResults() {
+  showScreen('screen-results');
+}
+
+// File management
+function handleFileAreaClick() {
+  if (!window.pywebview) return;
+  window.pywebview.api.pick_files().then(function(result) {
+    if (result && result.length > 0) {
+      result.forEach(function(p) {
+        var parts = p.replace(/\\/g, '/').split('/');
+        var name = parts[parts.length - 1];
+        if (!state.files.some(function(f) { return f.path === p; })) {
+          state.files.push({ path: p, name: name });
+        }
+      });
+      renderFileList();
+    }
+  }).catch(function(e) { console.error('pick_files error', e); });
+}
+
+function removeFile(index) {
+  state.files.splice(index, 1);
+  renderFileList();
+}
+
+function renderFileList() {
+  var area = document.getElementById('file-area');
+  var list = document.getElementById('file-list');
+  var addMore = document.getElementById('file-add-more');
+  var btn = document.getElementById('btn-transcribe');
+
+  // Clear list safely
+  while (list.firstChild) list.removeChild(list.firstChild);
+
+  if (state.files.length === 0) {
+    area.classList.add('empty');
+    area.classList.remove('has-files');
+    addMore.classList.add('hidden');
+  } else {
+    area.classList.remove('empty');
+    area.classList.add('has-files');
+    addMore.classList.remove('hidden');
+    state.files.forEach(function(f, i) {
+      var li = document.createElement('li');
+      var span = document.createElement('span');
+      span.className = 'file-name';
+      span.title = f.path;
+      span.textContent = f.name;
+      var btn2 = document.createElement('button');
+      btn2.className = 'file-remove';
+      btn2.title = 'Remove';
+      btn2.textContent = '\xd7';
+      btn2.setAttribute('data-idx', String(i));
+      btn2.addEventListener('click', function(e) {
+        e.stopPropagation();
+        removeFile(parseInt(this.getAttribute('data-idx'), 10));
+      });
+      li.appendChild(span);
+      li.appendChild(btn2);
+      list.appendChild(li);
+    });
+  }
+
+  btn.disabled = !(state.files.length > 0 && state.modelReady);
+}
+
+// Transcription
+function startTranscription() {
+  if (!window.pywebview || state.files.length === 0) return;
+  var paths = state.files.map(function(f) { return f.path; });
+  var numSpeakers = document.getElementById('speaker-select').value || null;
+
+  state.batchTotal = paths.length;
+  state.completedFiles = [];
+  state.failedFiles = [];
+
+  var items = document.getElementById('progress-items');
+  while (items.firstChild) items.removeChild(items.firstChild);
+
+  paths.forEach(function(p) {
+    var parts = p.replace(/\\/g, '/').split('/');
+    var name = parts[parts.length - 1];
+    var id = safeid(name);
+
+    var div = document.createElement('div');
+    div.className = 'file-progress-item';
+    div.id = 'pi-' + id;
+
+    var nameDiv = document.createElement('div');
+    nameDiv.className = 'file-progress-name';
+    nameDiv.textContent = name;
+
+    var track = document.createElement('div');
+    track.className = 'progress-track';
+    var fill = document.createElement('div');
+    fill.className = 'progress-fill';
+    fill.id = 'pf-' + id;
+    track.appendChild(fill);
+
+    var label = document.createElement('div');
+    label.className = 'progress-label';
+    label.id = 'pl-' + id;
+    label.textContent = 'Waiting';
+
+    div.appendChild(nameDiv);
+    div.appendChild(track);
+    div.appendChild(label);
+    items.appendChild(div);
+  });
+
+  var headerEl = document.getElementById('processing-header');
+  headerEl.textContent = 'Transcribing ' + paths.length + ' recording' + (paths.length !== 1 ? 's' : '') + '...';
+
+  state.batchStartTime = Date.now();
+  if (state.elapsedInterval) clearInterval(state.elapsedInterval);
+  state.elapsedInterval = setInterval(updateElapsed, 1000);
+
+  showScreen('screen-processing');
+
+  window.pywebview.api.start_transcription(paths, numSpeakers).catch(function(e) {
+    console.error('start_transcription error', e);
+  });
+}
+
+function stopTranscription() {
+  if (window.pywebview) window.pywebview.api.stop();
+}
+
+function updateElapsed() {
+  if (!state.batchStartTime) return;
+  var sec = Math.floor((Date.now() - state.batchStartTime) / 1000);
+  var mm = String(Math.floor(sec / 60)).padStart(2, '0');
+  var ss = String(sec % 60).padStart(2, '0');
+  document.getElementById('elapsed-display').textContent = mm + ':' + ss;
+}
+
+// Python event handler
+window.onPythonEvent = function(event, data) {
+  switch (event) {
+    case 'status': {
+      var badge = document.getElementById('model-status-badge');
+      var text = document.getElementById('model-status-text');
+      badge.className = 'status-badge loading';
+      text.textContent = data.message;
+      break;
+    }
+    case 'model_ready': {
+      var badge = document.getElementById('model-status-badge');
+      var text = document.getElementById('model-status-text');
+      badge.className = 'status-badge ready';
+      text.textContent = 'Model ready';
+      state.modelReady = true;
+      renderFileList();
+      break;
+    }
+    case 'model_error': {
+      var badge = document.getElementById('model-status-badge');
+      var text = document.getElementById('model-status-text');
+      badge.className = 'status-badge error';
+      text.textContent = 'Model failed to load';
+      showToast('Model failed to load. Check logs for details.');
+      break;
+    }
+    case 'file_start': {
+      var id = safeid(data.filename);
+      var fill = document.getElementById('pf-' + id);
+      var label = document.getElementById('pl-' + id);
+      if (fill) { fill.style.width = '0%'; fill.className = 'progress-fill'; }
+      if (label) { label.textContent = 'Starting...'; label.className = 'progress-label'; }
+      break;
+    }
+    case 'stage': {
+      var id = safeid(data.filename);
+      var label = document.getElementById('pl-' + id);
+      if (!label) break;
+      if (data.event === 'start') {
+        var nice = STAGE_LABELS[data.stage] || data.stage;
+        label.textContent = nice + '...';
+        label.className = 'progress-label';
+        var fill = document.getElementById('pf-' + id);
+        if (fill && data.stage !== 'Transcribing') {
+          fill.style.transition = 'none';
+          fill.style.width = '100%';
+          fill.style.opacity = '0.4';
+        }
+      }
+      break;
+    }
+    case 'progress': {
+      var id = safeid(data.filename);
+      var fill = document.getElementById('pf-' + id);
+      var label = document.getElementById('pl-' + id);
+      if (fill) {
+        fill.style.transition = 'width 0.3s ease';
+        fill.style.opacity = '1';
+        fill.style.width = data.percent + '%';
+        fill.className = 'progress-fill';
+      }
+      if (label) {
+        label.textContent = 'Transcribing ' + Math.round(data.percent) + '%';
+        label.className = 'progress-label';
+      }
+      break;
+    }
+    case 'file_done': {
+      var id = safeid(data.filename);
+      var fill = document.getElementById('pf-' + id);
+      var label = document.getElementById('pl-' + id);
+      if (fill) { fill.style.width = '100%'; fill.style.opacity = '1'; fill.className = 'progress-fill done'; }
+      if (label) { label.textContent = 'Done \u2713'; label.className = 'progress-label'; }
+      state.completedFiles.push(data.filename);
+      break;
+    }
+    case 'file_error': {
+      var id = safeid(data.filename);
+      var fill = document.getElementById('pf-' + id);
+      var label = document.getElementById('pl-' + id);
+      if (fill) { fill.className = 'progress-fill error'; fill.style.width = '40%'; fill.style.opacity = '1'; }
+      if (label) { label.textContent = data.error || 'Error'; label.className = 'progress-label error-label'; }
+      state.failedFiles.push(data.filename);
+      break;
+    }
+    case 'batch_done':
+    case 'stopped': {
+      clearInterval(state.elapsedInterval);
+      var elapsed = state.batchStartTime ? Math.floor((Date.now() - state.batchStartTime) / 1000) : 0;
+      showResultsScreen(elapsed, event === 'stopped');
+      break;
+    }
+    case 'batch_error': {
+      clearInterval(state.elapsedInterval);
+      showToast(data.error || 'Transcription failed. See logs.');
+      showScreen('screen-setup');
+      break;
+    }
+  }
+};
+
+// Results screen
+function showResultsScreen(elapsed, stopped) {
+  var count = state.completedFiles.length;
+  var total = state.batchTotal;
+
+  var titleEl = document.getElementById('results-title');
+  if (stopped) {
+    titleEl.textContent = count + ' of ' + total + ' recording' + (total !== 1 ? 's' : '') + ' transcribed (stopped)';
+  } else if (state.failedFiles.length > 0) {
+    titleEl.textContent = count + ' of ' + total + ' recording' + (total !== 1 ? 's' : '') + ' transcribed';
+  } else {
+    titleEl.textContent = count + ' recording' + (count !== 1 ? 's' : '') + ' transcribed';
+  }
+
+  var mins = Math.floor(elapsed / 60);
+  var secs = elapsed % 60;
+  var timeStr = '';
+  if (mins > 0) timeStr += mins + ' minute' + (mins !== 1 ? 's' : '') + ' ';
+  timeStr += secs + ' second' + (secs !== 1 ? 's' : '');
+  document.getElementById('results-subtitle').textContent = 'Total time: ' + timeStr;
+
+  var list = document.getElementById('results-list');
+  while (list.firstChild) list.removeChild(list.firstChild);
+
+  state.completedFiles.forEach(function(filename) {
+    var row = document.createElement('div');
+    row.className = 'result-file-row';
+
+    var nameSpan = document.createElement('span');
+    nameSpan.className = 'result-file-name';
+    nameSpan.title = filename;
+    nameSpan.textContent = filename;
+
+    var actions = document.createElement('div');
+    actions.className = 'result-actions';
+
+    var viewBtn = document.createElement('button');
+    viewBtn.className = 'btn-secondary';
+    viewBtn.textContent = 'View';
+    viewBtn.addEventListener('click', (function(fn) {
+      return function() { openViewer(fn); };
+    })(filename));
+
+    var eid = 'em-' + safeid(filename);
+    var dropWrap = document.createElement('div');
+    dropWrap.className = 'dropdown-wrap';
+
+    var exportBtn = document.createElement('button');
+    exportBtn.className = 'btn-secondary';
+    exportBtn.textContent = 'Export \u25be';
+    exportBtn.addEventListener('click', (function(id) {
+      return function() { toggleDropdown(id); };
+    })(eid));
+
+    var menu = buildExportMenu(eid, filename);
+
+    dropWrap.appendChild(exportBtn);
+    dropWrap.appendChild(menu);
+    actions.appendChild(viewBtn);
+    actions.appendChild(dropWrap);
+    row.appendChild(nameSpan);
+    row.appendChild(actions);
+    list.appendChild(row);
+  });
+
+  state.failedFiles.forEach(function(filename) {
+    var row = document.createElement('div');
+    row.className = 'result-file-row';
+
+    var nameSpan = document.createElement('span');
+    nameSpan.className = 'result-file-name text-muted';
+    nameSpan.title = filename;
+    nameSpan.textContent = filename;
+
+    var errSpan = document.createElement('span');
+    errSpan.style.fontSize = '13px';
+    errSpan.style.color = '#ff3b30';
+    errSpan.textContent = 'Failed';
+
+    row.appendChild(nameSpan);
+    row.appendChild(errSpan);
+    list.appendChild(row);
+  });
+
+  showScreen('screen-results');
+}
+
+function buildExportMenu(id, filename) {
+  var menu = document.createElement('div');
+  menu.className = 'dropdown-menu';
+  menu.id = id;
+
+  var formats = [
+    { label: 'Export as', section: true },
+    { label: 'Plain text', format: 'plain' },
+    { label: 'SRT subtitles', format: 'srt' },
+    { label: 'For QDA software', section: true },
+    { label: 'For MAXQDA', format: 'maxqda' },
+    { label: 'For ATLAS.ti', format: 'atlasti' },
+    { label: 'For NVivo', format: 'nvivo' },
+  ];
+
+  formats.forEach(function(item) {
+    if (item.section) {
+      var s = document.createElement('div');
+      s.className = 'menu-section';
+      s.textContent = item.label;
+      menu.appendChild(s);
+    } else {
+      var btn = document.createElement('button');
+      btn.textContent = item.label;
+      btn.addEventListener('click', (function(fn, fmt) {
+        return function() { exportFile(fn, fmt); };
+      })(filename, item.format));
+      menu.appendChild(btn);
+    }
+  });
+
+  return menu;
+}
+
+// Viewer
+function openViewer(filename) {
+  state.currentViewer = filename;
+  document.getElementById('viewer-filename').textContent = filename;
+  window.pywebview.api.get_transcript(filename).then(function(data) {
+    renderViewer(filename, data);
+    showScreen('screen-viewer');
+  });
+}
+
+function renderViewer(filename, data) {
+  var speakersBar = document.getElementById('speakers-bar');
+  while (speakersBar.firstChild) speakersBar.removeChild(speakersBar.firstChild);
+
+  var label = document.createElement('span');
+  label.className = 'speakers-label';
+  label.textContent = 'Speakers';
+  speakersBar.appendChild(label);
+
+  if (data.speakers && data.speakers.length > 0) {
+    data.speakers.forEach(function(spk) {
+      var chip = document.createElement('span');
+      chip.className = 'speaker-chip';
+      var inp = document.createElement('input');
+      inp.type = 'text';
+      inp.value = spk;
+      inp.dataset.original = spk;
+      inp.title = 'Click to rename';
+      inp.style.width = Math.max(60, spk.length * 8) + 'px';
+      inp.addEventListener('input', function() {
+        this.style.width = Math.max(60, this.value.length * 8) + 'px';
+      });
+      inp.addEventListener('change', function() {
+        var oldName = this.dataset.original;
+        var newName = this.value.trim() || oldName;
+        this.value = newName;
+        if (newName !== oldName) {
+          var self = this;
+          window.pywebview.api.rename_speaker(filename, oldName, newName).then(function() {
+            speakersBar.querySelectorAll('input').forEach(function(i) {
+              if (i.dataset.original === oldName) i.dataset.original = newName;
+            });
+            window.pywebview.api.get_transcript(filename).then(function(fresh) {
+              renderTranscriptSegments(fresh.segments || []);
+            });
+          });
+        }
+      });
+      chip.appendChild(inp);
+      speakersBar.appendChild(chip);
+    });
+  } else {
+    var none = document.createElement('span');
+    none.style.fontSize = '13px';
+    none.style.color = '#8e8e93';
+    none.textContent = 'None detected';
+    speakersBar.appendChild(none);
+  }
+
+  renderTranscriptSegments(data.segments || []);
+}
+
+function renderTranscriptSegments(segments) {
+  var transcriptEl = document.getElementById('transcript-content');
+  while (transcriptEl.firstChild) transcriptEl.removeChild(transcriptEl.firstChild);
+
+  if (segments.length === 0) {
+    var p = document.createElement('p');
+    p.style.color = '#8e8e93';
+    p.style.fontSize = '14px';
+    p.textContent = 'No transcript available.';
+    transcriptEl.appendChild(p);
+    return;
+  }
+
+  segments.forEach(function(seg) {
+    var div = document.createElement('div');
+    div.className = 'segment';
+
+    var meta = document.createElement('div');
+    meta.className = 'segment-meta';
+
+    var timeSpan = document.createElement('span');
+    timeSpan.className = 'segment-time';
+    timeSpan.textContent = formatTimestamp(seg.start);
+
+    var spkSpan = document.createElement('span');
+    spkSpan.className = 'segment-speaker';
+    spkSpan.textContent = seg.speaker || 'UNKNOWN';
+
+    meta.appendChild(timeSpan);
+    meta.appendChild(spkSpan);
+
+    if (seg.confidence != null && seg.confidence < 0.7) {
+      var warn = document.createElement('span');
+      warn.className = 'segment-warn';
+      warn.textContent = '\u26a0 low confidence';
+      meta.appendChild(warn);
+    }
+
+    var textDiv = document.createElement('div');
+    textDiv.className = 'segment-text';
+    textDiv.textContent = (seg.text || '').trim();
+
+    div.appendChild(meta);
+    div.appendChild(textDiv);
+    transcriptEl.appendChild(div);
+  });
+}
+
+function formatTimestamp(seconds) {
+  var h = Math.floor(seconds / 3600);
+  var m = Math.floor((seconds % 3600) / 60);
+  var s = Math.floor(seconds % 60);
+  var mm = String(m).padStart(2, '0');
+  var ss = String(s).padStart(2, '0');
+  if (h > 0) return String(h).padStart(2, '0') + ':' + mm + ':' + ss;
+  return mm + ':' + ss;
+}
+
+// Export
+function exportFile(filename, format) {
+  closeAllDropdowns();
+  window.pywebview.api.export_transcript(filename, format).then(function(result) {
+    if (result && result.path) {
+      showToast('Saved to Desktop');
+    } else if (result && result.error) {
+      showToast('Export failed: ' + result.error);
+    }
+  }).catch(function(e) {
+    showToast('Export failed.');
+    console.error(e);
+  });
+}
+
+function exportCurrent(format) {
+  if (state.currentViewer) exportFile(state.currentViewer, format);
+}
+
+// Dropdowns
+function toggleDropdown(id) {
+  var menu = document.getElementById(id);
+  if (!menu) return;
+  var isOpen = menu.classList.contains('open');
+  closeAllDropdowns();
+  if (!isOpen) menu.classList.add('open');
+}
+
+function closeAllDropdowns() {
+  document.querySelectorAll('.dropdown-menu.open').forEach(function(m) { m.classList.remove('open'); });
+}
+
+document.addEventListener('click', function(e) {
+  if (!e.target.closest('.dropdown-wrap')) closeAllDropdowns();
+});
+
+// Footer
+function openLogs() {
+  if (window.pywebview) window.pywebview.api.open_logs();
+}
+
+function copyDiagnostics() {
+  if (!window.pywebview) return;
+  window.pywebview.api.copy_diagnostics().then(function(result) {
+    if (result && result.path) showToast('Diagnostics saved to Desktop');
+    else if (result && result.error) showToast('Failed: ' + result.error);
+  });
+}
+
+var _toastTimer = null;
+function showToast(msg) {
+  var toast = document.getElementById('toast');
+  toast.textContent = msg;
+  toast.classList.add('show');
+  if (_toastTimer) clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(function() { toast.classList.remove('show'); }, 3000);
+}
+
+function safeid(str) {
+  return String(str).replace(/[^a-z0-9]/gi, '_');
+}
+</script>
+</body>
+</html>
