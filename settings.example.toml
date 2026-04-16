@@ -3,7 +3,7 @@
 # 1. Create a HuggingFace account and token at:
 #    https://huggingface.co/settings/tokens  (a "Read" token is enough)
 # 2. Accept the model terms on these pages (one-off, while logged in):
-#    https://huggingface.co/pyannote/speaker-diarization-3.1
+#    https://huggingface.co/pyannote/speaker-diarization-community-1
 #    https://huggingface.co/pyannote/segmentation-3.0
 
 hf_token = "hf_YOUR_TOKEN_HERE"
@@ -12,9 +12,10 @@ hf_token = "hf_YOUR_TOKEN_HERE"
 # inbox  = "~/Transcripts/in"
 # outbox = "~/Transcripts/out"
 
-# Optional: override the Whisper model. Default shown.
-# model = "large-v3-turbo"
+# Optional: override the transcription model. Default shown.
+# model = "mlx-community/parakeet-tdt-0.6b-v2"
 
-# Optional: use MPS (Apple Silicon GPU) for align and diarise steps.
-# Whisper always runs on CPU (ctranslate2 has no MPS backend).
-# device_mps = false
+# Use MPS (Apple Silicon GPU) for the diarisation step.
+# parakeet-mlx always uses the MLX GPU automatically.
+# Falls back to CPU automatically if MPS fails.
+device_mps = true

@@ -1,7 +1,9 @@
 # Setup on a new Mac
 
-One-time install for a fresh Apple Silicon Mac. Expect ~30 min including the
+One-time install for a fresh Apple Silicon Mac. Expect ~15 min including the
 first model download.
+
+**Note:** This app is English-only. parakeet-mlx is an English-language model.
 
 ## 1. HuggingFace account and terms
 
@@ -10,7 +12,7 @@ per-user acceptance of the model terms.
 
 1. Create an account at https://huggingface.co/join (or log in).
 2. Accept the terms on **both** of these pages while logged in:
-   - https://huggingface.co/pyannote/speaker-diarization-3.1
+   - https://huggingface.co/pyannote/speaker-diarization-community-1
    - https://huggingface.co/pyannote/segmentation-3.0
 3. Create a **Read** token at https://huggingface.co/settings/tokens — copy it;
    you'll paste it into `settings.toml` below.
@@ -29,6 +31,8 @@ Then:
 brew install ffmpeg uv
 ```
 
+ffmpeg is required by pyannote for audio loading.
+
 ## 3. Project files
 
 Copy or clone this project to `~/Applications/local-transcribe/` (any path
@@ -41,8 +45,8 @@ cd ~/Applications/local-transcribe
 uv sync
 ```
 
-`uv sync` will download Python 3.11, PyTorch, WhisperX, pyannote etc. —
-around 3 GB. Give it a few minutes.
+`uv sync` will download Python 3.11, PyTorch, parakeet-mlx, pyannote etc. —
+around 2–3 GB. Give it a few minutes.
 
 ## 4. Settings
 
@@ -55,8 +59,8 @@ line. Save.
 
 ## 5. Warm the model caches
 
-First real use downloads ~3 GB of model weights. Do this once up-front so the
-user doesn't hit it on first click:
+First real use downloads ~1 GB of parakeet model weights plus pyannote model
+weights. Do this once up-front so the user doesn't hit it on first click:
 
 ```bash
 mkdir -p ~/Transcripts/in ~/Transcripts/out
@@ -96,7 +100,7 @@ cd ~/Applications/local-transcribe
     -o None \
     -p /bin/bash \
     -I com.rdobson.local-transcribe \
-    -V 0.1.0 \
+    -V 0.2.0 \
     "$(pwd)/launch.sh" \
     "/Applications/Local Transcribe.app"
 ```
@@ -130,7 +134,8 @@ always picks up the latest code.
 - Logs: `~/Library/Logs/LocalTranscribe/transcribe.log`
 - In the GUI: **Copy diagnostics** button → zip on the Desktop with the log
   and a redacted settings file. Email/send that zip when reporting issues.
-- Common remote-install trip-ups:
+- Common trip-ups:
   - HF token pasted without accepting pyannote terms → 401 on diarise.
   - Different HF account used for token vs. terms acceptance → same symptom.
-  - `ffmpeg` not on PATH → audio load failure. `brew install ffmpeg` fixes it.
+  - `ffmpeg` not on PATH → audio load failure in pyannote. `brew install ffmpeg` fixes it.
+  - parakeet-mlx requires Apple Silicon (M1/M2/M3/M4) — Intel Macs not supported.

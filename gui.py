@@ -31,27 +31,8 @@ from transcribe import (
     transcribe_one,
 )
 
-LANGUAGES = [
-    ("Auto-detect", None),
-    ("English", "en"),
-    ("Spanish", "es"),
-    ("French", "fr"),
-    ("German", "de"),
-    ("Italian", "it"),
-    ("Portuguese", "pt"),
-    ("Dutch", "nl"),
-    ("Japanese", "ja"),
-    ("Chinese", "zh"),
-    ("Russian", "ru"),
-    ("Arabic", "ar"),
-]
-
 MODEL_OPTIONS = [
-    "large-v3-turbo",
-    "large-v3",
-    "distil-large-v3",
-    "medium",
-    "small",
+    ("Parakeet TDT v2 (0.6B)", "mlx-community/parakeet-tdt-0.6b-v2"),
 ]
 
 log = logging.getLogger("local_transcribe")
@@ -139,25 +120,22 @@ class TranscribeApp(toga.App):
         out_row.add(toga.Button("Open", on_press=self.on_open_outputs))
         config_group.add(out_row)
 
-        # Settings row: Model | Language | Speakers
+        # Settings row: Model | Speakers
         settings_row = toga.Box(style=Pack(direction=ROW, padding_bottom=8))
         settings_row.add(toga.Label("Model:", style=Pack(padding_right=6, padding_top=6)))
-        default_model = self.settings.get("model", "large-v3-turbo")
-        if default_model not in MODEL_OPTIONS:
-            default_model = "large-v3-turbo"
-        self.model_select = toga.Selection(
-            items=MODEL_OPTIONS,
-            style=Pack(width=180, padding_right=16),
+        default_model_id = self.settings.get("model", MODEL_OPTIONS[0][1])
+        model_display_names = [label for label, _ in MODEL_OPTIONS]
+        default_display = next(
+            (label for label, mid in MODEL_OPTIONS if mid == default_model_id),
+            model_display_names[0],
         )
-        self.model_select.value = default_model
+        self.model_select = toga.Selection(
+            items=model_display_names,
+            style=Pack(width=240, padding_right=16),
+        )
+        self.model_select.value = default_display
         self.model_select.on_change = self.on_model_changed
         settings_row.add(self.model_select)
-
-        settings_row.add(toga.Label("Language:", style=Pack(padding_right=6, padding_top=6)))
-        self.language_select = toga.Selection(
-            items=[label for label, _ in LANGUAGES], style=Pack(width=160, padding_right=16)
-        )
-        settings_row.add(self.language_select)
 
         settings_row.add(toga.Label("Speakers:", style=Pack(padding_right=6, padding_top=6)))
         self.speakers_input = toga.TextInput(
@@ -445,13 +423,20 @@ class TranscribeApp(toga.App):
 
     # ---- Model selector ----
 
+    def _selected_model_id(self) -> str:
+        display = self.model_select.value
+        for label, mid in MODEL_OPTIONS:
+            if label == display:
+                return mid
+        return MODEL_OPTIONS[0][1]
+
     async def on_model_changed(self, widget) -> None:
         if self.busy:
             return
-        new_model = self.model_select.value
-        if not new_model:
+        model_id = self._selected_model_id()
+        if not model_id:
             return
-        log.info("Switching model to %s...", new_model)
+        log.info("Switching model to %s...", model_id)
         self.go_button.enabled = False
         self.model_select.enabled = False
 
@@ -462,20 +447,20 @@ class TranscribeApp(toga.App):
             gc.collect()
 
         # Persist new model choice
-        self.settings["model"] = new_model
+        self.settings["model"] = model_id
         self.save_settings()
 
         # Reload in background
-        self.loop.create_task(self._reload_model_task(new_model))
+        self.loop.create_task(self._reload_model_task(model_id))
 
-    async def _reload_model_task(self, model_name: str) -> None:
+    async def _reload_model_task(self, model_id: str) -> None:
         try:
             self.pipeline = await asyncio.to_thread(
-                load_pipeline, self.settings["hf_token"], model_name, "cpu", "int8",
+                load_pipeline, self.settings["hf_token"], model_id, self.settings,
             )
-            log.info("Model %s ready.", model_name)
+            log.info("Model %s ready.", model_id)
         except Exception:
-            log.exception("Model load failed for %s", model_name)
+            log.exception("Model load failed for %s", model_id)
         finally:
             if not self.busy:
                 self.go_button.enabled = True
@@ -484,29 +469,24 @@ class TranscribeApp(toga.App):
     # ---- Workflow ----
 
     async def load_model_background(self) -> None:
-        model_name = self.settings.get("model", "large-v3-turbo")
-        if model_name not in MODEL_OPTIONS:
-            model_name = "large-v3-turbo"
+        default_id = MODEL_OPTIONS[0][1]
+        model_id = self.settings.get("model", default_id)
+        known_ids = {mid for _, mid in MODEL_OPTIONS}
+        if model_id not in known_ids:
+            model_id = default_id
         self.go_button.enabled = False
         self.model_select.enabled = False
         try:
             self.pipeline = await asyncio.to_thread(
-                load_pipeline, self.settings["hf_token"], model_name, "cpu", "int8",
+                load_pipeline, self.settings["hf_token"], model_id, self.settings,
             )
-            log.info("Model %s ready.", model_name)
+            log.info("Model %s ready.", model_id)
         except Exception:
             log.exception("Model load failed")
         finally:
             if not self.busy:
                 self.go_button.enabled = True
             self.model_select.enabled = True
-
-    def selected_language(self) -> str | None:
-        label = self.language_select.value
-        for name, code in LANGUAGES:
-            if name == label:
-                return code
-        return None
 
     def selected_speakers(self) -> int | None:
         raw = self.speakers_input.value.strip()
@@ -542,7 +522,6 @@ class TranscribeApp(toga.App):
             return
 
         speakers = self.selected_speakers()
-        language = self.selected_language()
 
         self.busy = True
         self._stop_flag = False
@@ -558,8 +537,8 @@ class TranscribeApp(toga.App):
 
         queued_files = [i.path for i in self.queue if i.status == "Queued"]
         log_batch_start(queued_files)
-        log.info("Settings: speakers=%s language=%s model=%s",
-                 speakers, language, self.model_select.value)
+        log.info("Settings: speakers=%s model=%s",
+                 speakers, self._selected_model_id())
 
         try:
             while not self._stop_flag:
@@ -580,7 +559,7 @@ class TranscribeApp(toga.App):
                     await asyncio.to_thread(
                         transcribe_one,
                         item.path, self.outbox, self.pipeline,
-                        language, speakers, speakers,
+                        None, speakers, speakers,
                         self.settings,
                         self._on_stage_start,
                         self._on_stage_end,

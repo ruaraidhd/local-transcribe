@@ -70,7 +70,7 @@ def log_startup_diagnostics(settings: dict, inbox: Path, outbox: Path) -> None:
     logger.info("===== Session start =====")
     logger.info("macOS:      %s (%s)", platform.mac_ver()[0] or "?", platform.machine())
     logger.info("Python:     %s", sys.version.split()[0])
-    for pkg in ("torch", "whisperx", "pyannote.audio", "ctranslate2", "toga"):
+    for pkg in ("torch", "parakeet_mlx", "mlx", "pyannote.audio", "toga"):
         try:
             mod = __import__(pkg)
             ver = getattr(mod, "__version__", "unknown")

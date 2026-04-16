@@ -1,9 +1,11 @@
 # local_transcribe
 
-Local audio transcription and speaker diarisation on macOS, built on
-[WhisperX](https://github.com/m-bain/whisperX) (Whisper + wav2vec2 forced
-alignment + pyannote diarisation). Runs entirely on-device — no audio leaves
-the machine.
+Local audio transcription and speaker diarisation on macOS (Apple Silicon),
+built on [parakeet-mlx](https://github.com/senstella/parakeet-mlx) (MLX GPU
+transcription) + [pyannote.audio](https://github.com/pyannote/pyannote-audio)
+(diarisation). Runs entirely on-device — no audio leaves the machine.
+
+**English only.** parakeet-mlx is an English-language model.
 
 Ships as a small Toga GUI with a queue-based workflow: add files or folders,
 click Transcribe, outputs land in a folder you choose.
