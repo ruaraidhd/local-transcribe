@@ -295,6 +295,77 @@
     background: #f9f9fb; border-radius: 8px; line-height: 1.5;
   }
   .privacy-notice strong { color: #6e6e73; }
+
+  /* Audio player bar */
+  .audio-player-bar {
+    padding: 10px 0 12px;
+    border-bottom: 1px solid #f2f2f2;
+    margin-bottom: 12px;
+  }
+  .audio-player-bar audio {
+    width: 100%;
+    height: 36px;
+    border-radius: 8px;
+    outline: none;
+  }
+  .audio-player-bar.hidden { display: none; }
+
+  /* Review bar */
+  .review-bar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 14px; background: #FFF8EC;
+    border: 1px solid #FFD580; border-radius: 8px;
+    margin-bottom: 14px; gap: 10px;
+  }
+  .review-bar.hidden { display: none; }
+  .review-bar-text { font-size: 13px; color: #8a6000; font-weight: 500; }
+  .review-bar-done { font-size: 13px; color: #34c759; font-weight: 500; }
+  .btn-review-next {
+    background: #FF9500; border: none; color: #fff; border-radius: 7px;
+    padding: 5px 12px; font-size: 13px; font-weight: 600; cursor: pointer;
+    font-family: inherit; white-space: nowrap; flex-shrink: 0;
+    transition: background 0.15s;
+  }
+  .btn-review-next:hover { background: #e08600; }
+
+  /* Segment editable text */
+  .segment-text[contenteditable] {
+    border-radius: 6px; padding: 3px 6px; margin: -3px -6px;
+    transition: background 0.15s; cursor: text; outline: none;
+  }
+  .segment-text[contenteditable]:hover { background: rgba(0,122,255,0.06); }
+  .segment-text[contenteditable]:focus {
+    background: rgba(0,122,255,0.08);
+    box-shadow: inset 0 0 0 1.5px rgba(0,122,255,0.35);
+  }
+  .segment-edited { border-left: 2.5px solid #007AFF; padding-left: 8px; }
+  .segment-edit-icon { font-size: 11px; color: #007AFF; margin-left: 4px; opacity: 0.7; }
+
+  /* Segment time as clickable link */
+  .segment-time-btn {
+    font-size: 12px; color: #007AFF; font-variant-numeric: tabular-nums;
+    letter-spacing: 0.2px; cursor: pointer; background: none; border: none;
+    font-family: inherit; padding: 0; text-decoration: none;
+    transition: text-decoration 0.1s;
+  }
+  .segment-time-btn:hover { text-decoration: underline; }
+
+  /* Looks-right button inside flagged segments */
+  .btn-looks-right {
+    font-size: 11px; padding: 2px 7px; border-radius: 5px;
+    border: 1px solid #34c759; color: #34c759; background: none;
+    cursor: pointer; font-family: inherit; font-weight: 500; margin-left: 6px;
+    transition: background 0.1s, color 0.1s;
+  }
+  .btn-looks-right:hover { background: #34c759; color: #fff; }
+  .segment-warn.reviewed { opacity: 0.4; }
+
+  /* Flash highlight for next-flag navigation */
+  @keyframes flag-flash {
+    0%   { background: #FFF3CD; }
+    100% { background: transparent; }
+  }
+  .segment.flag-highlight { animation: flag-flash 1.5s ease-out forwards; }
 </style>
 </head>
 <body>
@@ -421,7 +492,14 @@
           <div class="star-rating size-md" id="viewer-star-rating"></div>
         </div>
       </div>
+      <div class="audio-player-bar hidden" id="audio-player-bar">
+        <audio id="viewer-audio" controls preload="metadata"></audio>
+      </div>
       <div class="speakers-bar" id="speakers-bar"></div>
+      <div class="review-bar hidden" id="review-bar">
+        <span class="review-bar-text" id="review-bar-text"></span>
+        <button class="btn-review-next" id="btn-review-next" onclick="goToNextFlag()">Next flag &#8594;</button>
+      </div>
       <div class="transcript" id="transcript-content"></div>
     </div>
   </div>
@@ -538,6 +616,7 @@ var state = {
   completedFiles: [],
   failedFiles: [],
   currentViewer: null,
+  reviewCursor: 0,
 };
 
 var STAGE_LABELS = {
@@ -932,6 +1011,7 @@ function buildExportMenu(id, filename) {
 // Viewer
 function openViewer(filename) {
   state.currentViewer = filename;
+  state.reviewCursor = 0;
   document.getElementById('viewer-filename').textContent = filename;
 
   // Init viewer star rating
@@ -944,6 +1024,24 @@ function openViewer(filename) {
     renderViewer(filename, data);
     showScreen('screen-viewer');
   });
+
+  // Load audio
+  if (window.pywebview) {
+    window.pywebview.api.get_audio_url(filename).then(function(result) {
+      if (result && result.url) {
+        var audio = document.getElementById('viewer-audio');
+        var bar = document.getElementById('audio-player-bar');
+        audio.src = result.url;
+        audio.onerror = function() {
+          console.warn('Audio failed to load:', result.url);
+          bar.classList.add('hidden');
+        };
+        bar.classList.remove('hidden');
+      }
+    }).catch(function(e) {
+      console.warn('get_audio_url error:', e);
+    });
+  }
 }
 
 function renderViewer(filename, data) {
@@ -1008,42 +1106,200 @@ function renderTranscriptSegments(segments) {
     p.style.fontSize = '14px';
     p.textContent = 'No transcript available.';
     transcriptEl.appendChild(p);
+    updateReviewBar(segments);
     return;
   }
 
-  segments.forEach(function(seg) {
+  var filename = state.currentViewer;
+
+  segments.forEach(function(seg, idx) {
     var div = document.createElement('div');
     div.className = 'segment';
+    div.dataset.idx = String(idx);
+    if (seg.edited) div.classList.add('segment-edited');
 
     var meta = document.createElement('div');
     meta.className = 'segment-meta';
 
-    var timeSpan = document.createElement('span');
-    timeSpan.className = 'segment-time';
-    timeSpan.textContent = formatTimestamp(seg.start);
+    // Clickable timestamp
+    var timeBtn = document.createElement('button');
+    timeBtn.className = 'segment-time-btn';
+    timeBtn.textContent = formatTimestamp(seg.start);
+    timeBtn.title = 'Click to play from here';
+    timeBtn.setAttribute('data-start', String(seg.start));
+    timeBtn.addEventListener('click', function() {
+      var audio = document.getElementById('viewer-audio');
+      if (audio && audio.src) {
+        audio.currentTime = parseFloat(this.getAttribute('data-start'));
+        audio.play().catch(function(e) { console.warn('play error:', e); });
+      }
+    });
 
     var spkSpan = document.createElement('span');
     spkSpan.className = 'segment-speaker';
     spkSpan.textContent = seg.speaker || 'UNKNOWN';
 
-    meta.appendChild(timeSpan);
+    meta.appendChild(timeBtn);
     meta.appendChild(spkSpan);
 
-    if (seg.confidence != null && seg.confidence < 0.7) {
-      var warn = document.createElement('span');
-      warn.className = 'segment-warn';
-      warn.textContent = '\u26a0 low confidence';
-      meta.appendChild(warn);
+    if (seg.edited) {
+      var editIcon = document.createElement('span');
+      editIcon.className = 'segment-edit-icon';
+      editIcon.title = 'Edited';
+      editIcon.textContent = '\u270e';
+      meta.appendChild(editIcon);
+    }
+
+    var isLowConf = (seg.confidence != null && seg.confidence < 0.7);
+    var warnSpan = null;
+    if (isLowConf) {
+      warnSpan = document.createElement('span');
+      warnSpan.className = 'segment-warn' + (seg.reviewed ? ' reviewed' : '');
+      warnSpan.dataset.warnIdx = String(idx);
+      warnSpan.textContent = '\u26a0 low confidence';
+      meta.appendChild(warnSpan);
+
+      if (!seg.reviewed) {
+        var looksRightBtn = document.createElement('button');
+        looksRightBtn.className = 'btn-looks-right';
+        looksRightBtn.textContent = '\u2713 Looks right';
+        looksRightBtn.setAttribute('data-seg-idx', String(idx));
+        looksRightBtn.addEventListener('click', (function(segIdx, btn, ws) {
+          return function() {
+            if (!window.pywebview) return;
+            window.pywebview.api.mark_segment_reviewed(filename, segIdx, true).then(function() {
+              btn.style.display = 'none';
+              if (ws) ws.classList.add('reviewed');
+              // Update in-memory segment so review bar count is correct
+              var currentData = null;
+              window.pywebview.api.get_transcript(filename).then(function(fresh) {
+                updateReviewBar(fresh.segments || []);
+              });
+            });
+          };
+        })(idx, looksRightBtn, warnSpan));
+        meta.appendChild(looksRightBtn);
+      }
     }
 
     var textDiv = document.createElement('div');
     textDiv.className = 'segment-text';
+    textDiv.setAttribute('contenteditable', 'plaintext-only');
     textDiv.textContent = (seg.text || '').trim();
+
+    // Store original text on focus
+    textDiv.addEventListener('focus', function() {
+      this.dataset.original = this.textContent;
+    });
+
+    // Keyboard handling: Enter commits, Escape reverts
+    textDiv.addEventListener('keydown', (function(segDiv, segIdx) {
+      return function(e) {
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          this.blur();
+        } else if (e.key === 'Escape') {
+          this.textContent = this.dataset.original || this.textContent;
+          this.blur();
+        }
+      };
+    })(div, idx));
+
+    // On blur: save if changed
+    textDiv.addEventListener('blur', (function(segIdx, segDiv) {
+      return function() {
+        var newText = this.textContent.trim();
+        var original = this.dataset.original || '';
+        if (newText === original) return;
+        if (!window.pywebview) return;
+        var td = this;
+        window.pywebview.api.update_segment_text(filename, segIdx, newText).then(function(result) {
+          if (result && result.status === 'saved') {
+            segDiv.classList.add('segment-edited');
+            // Add edit icon to meta if not already there
+            var existingIcon = segDiv.querySelector('.segment-edit-icon');
+            if (!existingIcon) {
+              var icon = document.createElement('span');
+              icon.className = 'segment-edit-icon';
+              icon.title = 'Edited';
+              icon.textContent = '\u270e';
+              segDiv.querySelector('.segment-meta').appendChild(icon);
+            }
+            // Mark reviewed: hide looks-right btn, dim warn
+            var lrBtn = segDiv.querySelector('.btn-looks-right');
+            if (lrBtn) lrBtn.style.display = 'none';
+            var ws = segDiv.querySelector('.segment-warn');
+            if (ws) ws.classList.add('reviewed');
+            // Refresh review bar
+            window.pywebview.api.get_transcript(filename).then(function(fresh) {
+              updateReviewBar(fresh.segments || []);
+            });
+          }
+        }).catch(function(e) { console.error('update_segment_text error:', e); });
+      };
+    })(idx, div));
 
     div.appendChild(meta);
     div.appendChild(textDiv);
     transcriptEl.appendChild(div);
   });
+
+  updateReviewBar(segments);
+}
+
+// ---- Review bar ----
+
+function updateReviewBar(segments) {
+  var bar = document.getElementById('review-bar');
+  var barText = document.getElementById('review-bar-text');
+  var nextBtn = document.getElementById('btn-review-next');
+
+  var unflagged = segments.filter(function(s) {
+    return s.confidence != null && s.confidence < 0.7 && !s.reviewed;
+  });
+
+  if (unflagged.length === 0) {
+    var anyFlagged = segments.some(function(s) {
+      return s.confidence != null && s.confidence < 0.7;
+    });
+    if (anyFlagged) {
+      bar.classList.remove('hidden');
+      barText.innerHTML = '<span class="review-bar-done">\u2713 All flagged segments reviewed</span>';
+      nextBtn.classList.add('hidden');
+    } else {
+      bar.classList.add('hidden');
+    }
+  } else {
+    bar.classList.remove('hidden');
+    barText.textContent = unflagged.length + ' segment' + (unflagged.length !== 1 ? 's' : '') + ' need review';
+    nextBtn.classList.remove('hidden');
+    nextBtn.textContent = 'Next flag \u2192';
+  }
+}
+
+function goToNextFlag() {
+  var transcriptEl = document.getElementById('transcript-content');
+  var flaggedDivs = [];
+  transcriptEl.querySelectorAll('.segment').forEach(function(div) {
+    var warn = div.querySelector('.segment-warn:not(.reviewed)');
+    if (warn) flaggedDivs.push(div);
+  });
+
+  if (flaggedDivs.length === 0) return;
+
+  // Wrap cursor
+  if (state.reviewCursor >= flaggedDivs.length) state.reviewCursor = 0;
+  var target = flaggedDivs[state.reviewCursor];
+  state.reviewCursor++;
+
+  target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  // Flash highlight
+  target.classList.remove('flag-highlight');
+  void target.offsetWidth; // force reflow to restart animation
+  target.classList.add('flag-highlight');
+  target.addEventListener('animationend', function() {
+    target.classList.remove('flag-highlight');
+  }, { once: true });
 }
 
 function formatTimestamp(seconds) {

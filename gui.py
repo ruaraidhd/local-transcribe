@@ -1,10 +1,13 @@
 """PyWebView GUI for local_transcribe."""
 from __future__ import annotations
 
+import http.server
 import json
 import gc
 import logging
 import os
+import secrets
+import socketserver
 import sys
 import threading
 import time
@@ -43,6 +46,124 @@ from transcribe import (
 log = logging.getLogger("local_transcribe")
 
 
+# ---------------------------------------------------------------------------
+# Local HTTP server for audio streaming (with byte-range support)
+# ---------------------------------------------------------------------------
+
+class _LimitedReader:
+    """Wraps a file object and stops after `n` bytes — used for range responses."""
+    def __init__(self, f, n):
+        self.f = f
+        self.remaining = n
+
+    def read(self, size=-1):
+        if self.remaining <= 0:
+            return b""
+        if size < 0 or size > self.remaining:
+            size = self.remaining
+        data = self.f.read(size)
+        self.remaining -= len(data)
+        return data
+
+    def close(self):
+        self.f.close()
+
+
+class _RangeHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
+    """Minimal handler that serves a single mapped file with HTTP range support."""
+
+    # Set by _make_audio_handler
+    _file_map: dict = {}
+
+    def do_GET(self):
+        path = self.path.split("?")[0]
+        if path.startswith("/audio/"):
+            token = path[7:]
+            fspath = self._file_map.get(token, "")
+        else:
+            fspath = ""
+
+        if not fspath or not os.path.isfile(fspath):
+            self.send_error(404)
+            return
+
+        try:
+            f = open(fspath, "rb")
+        except OSError:
+            self.send_error(404)
+            return
+
+        size = os.fstat(f.fileno()).st_size
+        range_header = self.headers.get("Range")
+
+        # Guess MIME type
+        ext = os.path.splitext(fspath)[1].lower()
+        mime = {
+            ".m4a": "audio/mp4", ".mp4": "audio/mp4",
+            ".mp3": "audio/mpeg", ".wav": "audio/wav",
+            ".flac": "audio/flac", ".ogg": "audio/ogg",
+            ".aac": "audio/aac", ".webm": "audio/webm",
+        }.get(ext, "audio/octet-stream")
+
+        if range_header:
+            start, end = self._parse_range(range_header, size)
+            if start is None:
+                f.close()
+                self.send_error(416)
+                return
+            self.send_response(206)
+            self.send_header("Content-Type", mime)
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+            self.send_header("Content-Length", str(end - start + 1))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            f.seek(start)
+            reader = _LimitedReader(f, end - start + 1)
+        else:
+            self.send_response(200)
+            self.send_header("Content-Type", mime)
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Content-Length", str(size))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            reader = f
+
+        try:
+            while True:
+                chunk = reader.read(65536)
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        finally:
+            reader.close()
+
+    @staticmethod
+    def _parse_range(header, size):
+        try:
+            units, rng = header.split("=", 1)
+            if units.strip() != "bytes":
+                return None, None
+            start_s, end_s = rng.split("-", 1)
+            start = int(start_s) if start_s.strip() else 0
+            end = int(end_s) if end_s.strip() else size - 1
+            return start, min(end, size - 1)
+        except Exception:
+            return None, None
+
+    def log_message(self, format, *args):
+        pass  # silence server logs
+
+
+def _make_audio_handler(file_map: dict):
+    """Return a handler class bound to the given file_map dict."""
+    class Handler(_RangeHTTPRequestHandler):
+        _file_map = file_map
+    return Handler
+
+
 class API:
     def __init__(self):
         self.settings = load_settings()
@@ -52,6 +173,10 @@ class API:
         self._busy = False
         # Results stored per-file for viewer
         self._results = {}  # filename -> {segments, tokens, speakers}
+        # Audio server state
+        self._audio_server_port: int | None = None
+        self._audio_file_map: dict = {}  # token -> filesystem path
+        self._start_audio_server()
 
     def pick_files(self):
         """Open native file dialog, return list of file paths."""
@@ -85,6 +210,61 @@ class API:
     def get_transcript(self, filename):
         """Return transcript data for the viewer."""
         return self._results.get(filename, {})
+
+    def get_audio_url(self, filename):
+        """Return an HTTP URL for the audio file, served via the local audio server."""
+        data = self._results.get(filename)
+        if not data or "audio_path" not in data:
+            return {"error": "No audio"}
+        if self._audio_server_port is None:
+            return {"error": "Audio server not available"}
+        token = secrets.token_urlsafe(16)
+        self._audio_file_map[token] = data["audio_path"]
+        return {"url": f"http://127.0.0.1:{self._audio_server_port}/audio/{token}"}
+
+    def update_segment_text(self, filename, segment_index, new_text):
+        """Update a segment's text in memory and write back to the outbox JSON."""
+        data = self._results.get(filename)
+        if not data or segment_index >= len(data["segments"]):
+            return {"error": "Segment not found"}
+
+        data["segments"][segment_index]["text"] = new_text.strip()
+        data["segments"][segment_index]["edited"] = True
+        data["segments"][segment_index]["reviewed"] = True  # editing implies review
+
+        outbox = Path(self.settings.get("outbox", "~/Transcripts/out")).expanduser()
+        stem = Path(filename).stem
+        json_path = outbox / f"{stem}.json"
+        if json_path.exists():
+            try:
+                existing = json.loads(json_path.read_text())
+                existing["segments"] = data["segments"]
+                json_path.write_text(json.dumps(existing, indent=2, ensure_ascii=False))
+            except Exception as e:
+                log.warning("Failed to persist edit to %s: %s", json_path, e)
+
+        return {"status": "saved"}
+
+    def mark_segment_reviewed(self, filename, segment_index, reviewed=True):
+        """Mark a segment as reviewed without editing it."""
+        data = self._results.get(filename)
+        if not data or segment_index >= len(data["segments"]):
+            return {"error": "Segment not found"}
+        data["segments"][segment_index]["reviewed"] = reviewed
+        return {"status": "ok"}
+
+    def _start_audio_server(self):
+        """Start a background HTTP server for audio streaming."""
+        try:
+            handler = _make_audio_handler(self._audio_file_map)
+            server = socketserver.TCPServer(("127.0.0.1", 0), handler)
+            server.allow_reuse_address = True
+            self._audio_server_port = server.server_address[1]
+            log.debug("Audio server started on port %d", self._audio_server_port)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+        except Exception as e:
+            log.warning("Could not start audio server: %s", e)
+            self._audio_server_port = None
 
     def rename_speaker(self, filename, old_name, new_name):
         """Rename a speaker in stored results."""

@@ -160,6 +160,8 @@ def _assign_speakers(tokens, speaker_turns) -> list[dict]:
     tokens: list of backends.Token (or anything with .text, .start, .duration)
     speaker_turns: list of backends.SpeakerTurn (or anything with .start, .end, .speaker)
     """
+    import math
+
     turns = [(t.start, t.end, t.speaker) for t in speaker_turns]
 
     def find_speaker(mid: float) -> str | None:
@@ -168,9 +170,18 @@ def _assign_speakers(tokens, speaker_turns) -> list[dict]:
                 return spk
         return None
 
+    def _segment_confidence(seg_tokens) -> float:
+        confidences = [t.confidence for t in seg_tokens if hasattr(t, "confidence")]
+        if confidences:
+            return math.exp(
+                sum(math.log(c + 1e-10) for c in confidences) / len(confidences)
+            )
+        return 1.0
+
     segments: list[dict] = []
     current_speaker: str | None = None
     current_text: list[str] = []
+    current_tokens: list = []
     current_start: float = 0.0
     current_end: float = 0.0
     # Seed prev_speaker with the first speaker that appears, so leading
@@ -190,11 +201,16 @@ def _assign_speakers(tokens, speaker_turns) -> list[dict]:
                     "start": current_start,
                     "end": current_end,
                     "text": "".join(current_text).strip(),
+                    "confidence": _segment_confidence(current_tokens),
+                    "edited": False,
+                    "reviewed": False,
                 })
             current_speaker = speaker
             current_start = token.start
             current_text = []
+            current_tokens = []
         current_text.append(token.text)
+        current_tokens.append(token)
         current_end = token.end
 
     if current_text:
@@ -203,10 +219,14 @@ def _assign_speakers(tokens, speaker_turns) -> list[dict]:
             "start": current_start,
             "end": current_end,
             "text": "".join(current_text).strip(),
+            "confidence": _segment_confidence(current_tokens),
+            "edited": False,
+            "reviewed": False,
         })
 
     # Smooth: merge very short segments (< 1s) into their neighbour.
     # First pass: merge short segments into the previous one.
+    # When merging, take the lower confidence of the two segments.
     smoothed: list[dict] = []
     for seg in segments:
         if (
@@ -216,9 +236,11 @@ def _assign_speakers(tokens, speaker_turns) -> list[dict]:
         ):
             smoothed[-1]["end"] = seg["end"]
             smoothed[-1]["text"] += " " + seg["text"]
+            smoothed[-1]["confidence"] = min(smoothed[-1]["confidence"], seg["confidence"])
         elif smoothed and smoothed[-1]["speaker"] == seg["speaker"]:
             smoothed[-1]["end"] = seg["end"]
             smoothed[-1]["text"] += " " + seg["text"]
+            smoothed[-1]["confidence"] = min(smoothed[-1]["confidence"], seg["confidence"])
         else:
             smoothed.append(seg)
 
@@ -229,6 +251,7 @@ def _assign_speakers(tokens, speaker_turns) -> list[dict]:
     ):
         smoothed[1]["start"] = smoothed[0]["start"]
         smoothed[1]["text"] = smoothed[0]["text"] + " " + smoothed[1]["text"]
+        smoothed[1]["confidence"] = min(smoothed[0]["confidence"], smoothed[1]["confidence"])
         smoothed.pop(0)
 
     return smoothed
