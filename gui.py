@@ -572,6 +572,18 @@ class TranscribeApp(toga.App):
                 finally:
                     self.refresh_table()
 
+                # transcribe_one frees the parakeet model to make room for
+                # pyannote. Reload it if more files are queued.
+                if self.pipeline and self.pipeline.model is None:
+                    try:
+                        model_id = self._selected_model_id()
+                        self.pipeline = await asyncio.to_thread(
+                            load_pipeline, self.settings["hf_token"],
+                            model_id, self.settings,
+                        )
+                    except Exception:
+                        log.exception("Failed to reload model between files")
+
             if self._stop_flag:
                 log.info("Batch stopped by user. Remaining items stay Queued.")
             else:

@@ -132,26 +132,34 @@ def load_pipeline(
 
 def _assign_speakers(tokens, diarization) -> list[dict]:
     """Group parakeet tokens into speaker-labelled segments."""
+    # pyannote ≥3.3 returns DiarizeOutput; extract the Annotation from it.
+    annotation = getattr(diarization, "speaker_diarization", diarization)
     speaker_turns = [
         (turn.start, turn.end, speaker)
-        for turn, _, speaker in diarization.itertracks(yield_label=True)
+        for turn, _, speaker in annotation.itertracks(yield_label=True)
     ]
 
-    def find_speaker(mid: float) -> str:
+    def find_speaker(mid: float) -> str | None:
         for t_start, t_end, spk in speaker_turns:
             if t_start <= mid <= t_end:
                 return spk
-        return "UNKNOWN"
+        return None
 
     segments: list[dict] = []
     current_speaker: str | None = None
     current_text: list[str] = []
     current_start: float = 0.0
     current_end: float = 0.0
+    # Seed prev_speaker with the first speaker that appears, so leading
+    # tokens before pyannote's first turn inherit forward rather than
+    # falling to UNKNOWN.
+    first_speaker = speaker_turns[0][2] if speaker_turns else "UNKNOWN"
+    prev_speaker = first_speaker
 
     for token in tokens:
         mid = token.start + token.duration / 2
-        speaker = find_speaker(mid)
+        speaker = find_speaker(mid) or prev_speaker
+        prev_speaker = speaker
         if speaker != current_speaker:
             if current_text:
                 segments.append({
@@ -174,7 +182,33 @@ def _assign_speakers(tokens, diarization) -> list[dict]:
             "text": "".join(current_text).strip(),
         })
 
-    return segments
+    # Smooth: merge very short segments (< 1s) into their neighbour.
+    # First pass: merge short segments into the previous one.
+    smoothed: list[dict] = []
+    for seg in segments:
+        if (
+            smoothed
+            and (seg["end"] - seg["start"]) < 1.0
+            and smoothed[-1]["speaker"] != seg["speaker"]
+        ):
+            smoothed[-1]["end"] = seg["end"]
+            smoothed[-1]["text"] += " " + seg["text"]
+        elif smoothed and smoothed[-1]["speaker"] == seg["speaker"]:
+            smoothed[-1]["end"] = seg["end"]
+            smoothed[-1]["text"] += " " + seg["text"]
+        else:
+            smoothed.append(seg)
+
+    # Second pass: if the first segment is very short, merge it forward.
+    if (
+        len(smoothed) >= 2
+        and (smoothed[0]["end"] - smoothed[0]["start"]) < 1.0
+    ):
+        smoothed[1]["start"] = smoothed[0]["start"]
+        smoothed[1]["text"] = smoothed[0]["text"] + " " + smoothed[1]["text"]
+        smoothed.pop(0)
+
+    return smoothed
 
 
 def transcribe_one(
@@ -195,6 +229,23 @@ def transcribe_one(
         )
 
     log.info("=== %s ===", audio_path.name)
+
+    # Preflight: warn if disk space is low (swap needs headroom).
+    import shutil
+    free_gb = shutil.disk_usage(Path.home()).free / (1024 ** 3)
+    if free_gb < 10:
+        log.warning(
+            "LOW DISK: only %.1f GB free. macOS needs free space for swap "
+            "when processing large files. Risk of system freeze if memory "
+            "pressure is high. Free up disk space before continuing.", free_gb
+        )
+    if free_gb < 5:
+        raise RuntimeError(
+            f"Aborting: only {free_gb:.1f} GB free disk. Processing large "
+            f"audio files requires at least 10 GB free for swap headroom. "
+            f"Free up disk space and try again."
+        )
+
     t_total = time.perf_counter()
 
     # --- Stage 1: Transcribe ---
@@ -203,7 +254,14 @@ def transcribe_one(
     log.info("Transcribing...")
     t0 = time.perf_counter()
 
-    result = pipeline.model.transcribe(str(audio_path))
+    def _chunk_progress(current_pos, total_pos):
+        if on_progress and total_pos > 0:
+            on_progress((current_pos / total_pos) * 100)
+
+    result = pipeline.model.transcribe(
+        str(audio_path), chunk_duration=600.0, overlap_duration=15.0,
+        chunk_callback=_chunk_progress,
+    )
 
     log.info(
         "Transcribe: %.1fs (%d tokens)",
@@ -213,13 +271,37 @@ def transcribe_one(
     if on_stage_end:
         on_stage_end("Transcribing")
 
+    # Free the parakeet model before loading pyannote — on 16 GB unified
+    # memory, holding both simultaneously can exhaust RAM + swap.
+    import gc
+    import mlx.core as mx
+    pipeline.model = None
+    gc.collect()
+    mx.metal.clear_cache()
+    log.debug("Freed parakeet model before diarisation")
+
     # --- Stage 2: Diarise ---
     if on_stage_start:
         on_stage_start("Diarising")
     log.info("Diarising (speakers=%s-%s)...", min_speakers, max_speakers)
     t0 = time.perf_counter()
 
+    import numpy as np
+    import subprocess as sp
+    import torch
     from pyannote.audio import Pipeline as PyannotePipeline
+
+    # Decode audio via ffmpeg to 16kHz mono float32 — works for any format
+    # ffmpeg supports (webm, m4a, mp3, etc.) and avoids pyannote's broken
+    # torchcodec loader.
+    SAMPLE_RATE = 16000
+    cmd = ["ffmpeg", "-i", str(audio_path), "-f", "f32le", "-ac", "1",
+           "-ar", str(SAMPLE_RATE), "-loglevel", "error", "-"]
+    pcm = sp.run(cmd, capture_output=True, check=True).stdout
+    waveform = torch.from_numpy(
+        np.frombuffer(pcm, dtype=np.float32).copy()
+    ).unsqueeze(0)
+    audio_input = {"waveform": waveform, "sample_rate": SAMPLE_RATE}
 
     def _do_diarize(device: str) -> object:
         diarize_pipeline = PyannotePipeline.from_pretrained(
@@ -227,14 +309,13 @@ def transcribe_one(
             token=pipeline.hf_token,
         )
         if device == "mps":
-            import torch
             diarize_pipeline = diarize_pipeline.to(torch.device("mps"))
         kwargs: dict = {}
         if min_speakers is not None:
             kwargs["min_speakers"] = min_speakers
         if max_speakers is not None:
             kwargs["max_speakers"] = max_speakers
-        return diarize_pipeline(str(audio_path), **kwargs)
+        return diarize_pipeline(audio_input, **kwargs)
 
     try:
         dev = pipeline.diarize_device
