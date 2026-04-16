@@ -1,7 +1,7 @@
 [project]
-name = "local-transcribe"
+name = "verbatim"
 version = "0.2.0"
-description = "Local audio transcription + diarisation via parakeet-mlx"
+description = "Verbatim — private on-device audio transcription + diarisation via parakeet-mlx"
 readme = "README.md"
 requires-python = ">=3.11,<3.12"
 dependencies = [

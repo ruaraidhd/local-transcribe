@@ -185,6 +185,15 @@ class API:
 
         return {"path": str(out)}
 
+    def pick_output_folder(self):
+        result = self.window.create_file_dialog(webview.FileDialog.FOLDER)
+        if result and len(result) > 0:
+            folder = str(result[0])
+            self.settings["outbox"] = folder
+            save_settings(self.settings)
+            return {"path": folder}
+        return None
+
     def open_logs(self):
         import subprocess
         subprocess.run(["open", str(LOG_DIR)], check=False)
@@ -322,7 +331,7 @@ def main():
     )
 
     window = webview.create_window(
-        "Local Transcribe",
+        "Verbatim",
         url=str(Path(getattr(sys, "_MEIPASS", Path(__file__).parent)) / "web" / "index.html"),
         js_api=api,
         width=800,

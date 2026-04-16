@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Local Transcribe</title>
+<title>Verbatim</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -198,6 +198,46 @@
     transition: transform 0.25s ease, opacity 0.25s ease; pointer-events: none; white-space: nowrap;
   }
   .toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+
+  /* Settings modal */
+  .modal-backdrop {
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,0.4); z-index: 200;
+    align-items: center; justify-content: center;
+  }
+  .modal-backdrop.open { display: flex; }
+  .modal-card {
+    background: #fff; border-radius: 16px;
+    box-shadow: 0 8px 40px rgba(0,0,0,0.18);
+    width: 420px; max-width: calc(100vw - 40px);
+    padding: 28px 28px 24px; position: relative;
+  }
+  .modal-title {
+    font-size: 18px; font-weight: 700; color: #1d1d1f; margin-bottom: 20px;
+  }
+  .modal-close {
+    position: absolute; top: 16px; right: 16px;
+    background: none; border: none; font-size: 20px; color: #8e8e93;
+    cursor: pointer; line-height: 1; padding: 4px 6px; border-radius: 6px;
+  }
+  .modal-close:hover { color: #1d1d1f; background: #f2f2f7; }
+  .settings-section { margin-bottom: 20px; }
+  .settings-section:last-child { margin-bottom: 0; }
+  .settings-section-title {
+    font-size: 11px; font-weight: 600; color: #8e8e93;
+    text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px;
+  }
+  .settings-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 12px; background: #f9f9fb; border-radius: 8px;
+    margin-bottom: 6px;
+  }
+  .settings-row:last-child { margin-bottom: 0; }
+  .settings-row-label { flex: 1; font-size: 14px; color: #3a3a3c; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .settings-about {
+    font-size: 13px; color: #6e6e73; padding: 10px 12px;
+    background: #f9f9fb; border-radius: 8px; text-align: center;
+  }
 </style>
 </head>
 <body>
@@ -207,7 +247,7 @@
   <!-- SCREEN: SETUP -->
   <div id="screen-setup">
     <div class="header">
-      <h1>Local Transcribe</h1>
+      <h1>Verbatim</h1>
       <p>Transcribe and identify speakers in your recordings — privately, on-device.</p>
     </div>
 
@@ -258,8 +298,7 @@
 
     <div class="footer">
       <div class="footer-links">
-        <button class="btn-link" onclick="openLogs()">View logs</button>
-        <button class="btn-link" onclick="copyDiagnostics()">Save diagnostics</button>
+        <button class="btn-link" onclick="openSettings()">&#9881; Settings</button>
       </div>
     </div>
   </div>
@@ -293,8 +332,7 @@
     </div>
     <div class="footer">
       <div class="footer-links">
-        <button class="btn-link" onclick="openLogs()">View logs</button>
-        <button class="btn-link" onclick="copyDiagnostics()">Save diagnostics</button>
+        <button class="btn-link" onclick="openSettings()">&#9881; Settings</button>
       </div>
     </div>
   </div>
@@ -323,6 +361,41 @@
     </div>
   </div>
 
+</div>
+
+<!-- SETTINGS MODAL -->
+<div class="modal-backdrop" id="settings-modal" onclick="handleBackdropClick(event)">
+  <div class="modal-card">
+    <button class="modal-close" onclick="closeSettings()" title="Close">&times;</button>
+    <div class="modal-title">Settings</div>
+
+    <div class="settings-section">
+      <div class="settings-section-title">Output Folder</div>
+      <div class="settings-row">
+        <span class="settings-row-label" id="settings-outbox-path">Loading...</span>
+        <button class="btn-secondary" onclick="pickOutputFolder()">Change...</button>
+      </div>
+    </div>
+
+    <div class="settings-section">
+      <div class="settings-section-title">Diagnostics</div>
+      <div class="settings-row">
+        <span class="settings-row-label">Application logs</span>
+        <button class="btn-secondary" onclick="openLogs()">View logs</button>
+      </div>
+      <div class="settings-row">
+        <span class="settings-row-label">Diagnostics package</span>
+        <button class="btn-secondary" onclick="copyDiagnostics()">Save diagnostics</button>
+      </div>
+    </div>
+
+    <div class="settings-section">
+      <div class="settings-section-title">About</div>
+      <div class="settings-about">
+        Verbatim v0.2.0 &bull; parakeet-mlx + pyannote &bull; Built by SLS
+      </div>
+    </div>
+  </div>
 </div>
 
 <div class="toast" id="toast"></div>
@@ -902,6 +975,45 @@ function showToast(msg) {
 
 function safeid(str) {
   return String(str).replace(/[^a-z0-9]/gi, '_');
+}
+
+// Settings modal
+function openSettings() {
+  var modal = document.getElementById('settings-modal');
+  // Try to read current outbox from pywebview if available
+  if (window.pywebview) {
+    // Reflect current path if stored in JS (set on pick)
+    // Default label — will be updated on pick
+    var el = document.getElementById('settings-outbox-path');
+    if (!el.dataset.path) {
+      el.textContent = '~/Transcripts/out (default)';
+    }
+  }
+  modal.classList.add('open');
+}
+
+function closeSettings() {
+  document.getElementById('settings-modal').classList.remove('open');
+}
+
+function handleBackdropClick(e) {
+  if (e.target === document.getElementById('settings-modal')) {
+    closeSettings();
+  }
+}
+
+function pickOutputFolder() {
+  if (!window.pywebview) return;
+  window.pywebview.api.pick_output_folder().then(function(result) {
+    if (result && result.path) {
+      var el = document.getElementById('settings-outbox-path');
+      el.textContent = result.path;
+      el.dataset.path = result.path;
+      showToast('Output folder updated');
+    }
+  }).catch(function(e) {
+    console.error('pick_output_folder error', e);
+  });
 }
 </script>
 </body>
