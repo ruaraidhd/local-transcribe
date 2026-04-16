@@ -34,11 +34,18 @@ AUDIO_EXTS = {".wav", ".mp3", ".m4a", ".mp4", ".flac", ".ogg", ".webm", ".aac"}
 log = logging.getLogger("local_transcribe")
 
 
+from backends import (
+    TranscriptionBackend,
+    DiarisationBackend,
+    get_transcription_backend,
+    get_diarisation_backend,
+)
+
+
 @dataclass
 class Pipeline:
-    model: object          # parakeet-mlx model
-    hf_token: str
-    diarize_device: str    # "mps" or "cpu" for pyannote
+    transcriber: TranscriptionBackend
+    diariser: DiarisationBackend
 
 
 def load_settings() -> dict:
@@ -128,26 +135,27 @@ def load_pipeline(
     model_id: str = "mlx-community/parakeet-tdt-0.6b-v2",
     settings: dict | None = None,
 ) -> Pipeline:
-    import parakeet_mlx
-    log.info("Loading parakeet model %s ...", model_id)
-    t0 = time.perf_counter()
-    model = parakeet_mlx.from_pretrained(model_id)
-    log.info("Model loaded (%.1fs)", time.perf_counter() - t0)
-    dev = accel_device(settings or {})
-    return Pipeline(model=model, hf_token=hf_token, diarize_device=dev)
+    _settings = settings or {}
+    transcriber = get_transcription_backend(_settings.get("transcription_backend", "parakeet-mlx"))
+    transcriber.load(model_id)
+    dev = accel_device(_settings)
+    diariser = get_diarisation_backend(
+        _settings.get("diarisation_backend", "pyannote"),
+        device=dev, hf_token=hf_token,
+    )
+    return Pipeline(transcriber=transcriber, diariser=diariser)
 
 
-def _assign_speakers(tokens, diarization) -> list[dict]:
-    """Group parakeet tokens into speaker-labelled segments."""
-    # pyannote ≥3.3 returns DiarizeOutput; extract the Annotation from it.
-    annotation = getattr(diarization, "speaker_diarization", diarization)
-    speaker_turns = [
-        (turn.start, turn.end, speaker)
-        for turn, _, speaker in annotation.itertracks(yield_label=True)
-    ]
+def _assign_speakers(tokens, speaker_turns) -> list[dict]:
+    """Group tokens into speaker-labelled segments.
+
+    tokens: list of backends.Token (or anything with .text, .start, .duration)
+    speaker_turns: list of backends.SpeakerTurn (or anything with .start, .end, .speaker)
+    """
+    turns = [(t.start, t.end, t.speaker) for t in speaker_turns]
 
     def find_speaker(mid: float) -> str | None:
-        for t_start, t_end, spk in speaker_turns:
+        for t_start, t_end, spk in turns:
             if t_start <= mid <= t_end:
                 return spk
         return None
@@ -160,7 +168,7 @@ def _assign_speakers(tokens, diarization) -> list[dict]:
     # Seed prev_speaker with the first speaker that appears, so leading
     # tokens before pyannote's first turn inherit forward rather than
     # falling to UNKNOWN.
-    first_speaker = speaker_turns[0][2] if speaker_turns else "UNKNOWN"
+    first_speaker = turns[0][2] if turns else "UNKNOWN"
     prev_speaker = first_speaker
 
     for token in tokens:
@@ -261,14 +269,7 @@ def transcribe_one(
     log.info("Transcribing...")
     t0 = time.perf_counter()
 
-    def _chunk_progress(current_pos, total_pos):
-        if on_progress and total_pos > 0:
-            on_progress((current_pos / total_pos) * 100)
-
-    result = pipeline.model.transcribe(
-        str(audio_path), chunk_duration=600.0, overlap_duration=15.0,
-        chunk_callback=_chunk_progress,
-    )
+    result = pipeline.transcriber.transcribe(audio_path, language, on_progress)
 
     log.info(
         "Transcribe: %.1fs (%d tokens)",
@@ -278,14 +279,8 @@ def transcribe_one(
     if on_stage_end:
         on_stage_end("Transcribing")
 
-    # Free the parakeet model before loading pyannote — on 16 GB unified
-    # memory, holding both simultaneously can exhaust RAM + swap.
-    import gc
-    import mlx.core as mx
-    pipeline.model = None
-    gc.collect()
-    mx.metal.clear_cache()
-    log.debug("Freed parakeet model before diarisation")
+    # Free the transcription model before diarisation to save memory.
+    pipeline.transcriber.unload()
 
     # --- Stage 2: Diarise ---
     if on_stage_start:
@@ -293,47 +288,10 @@ def transcribe_one(
     log.info("Diarising (speakers=%s-%s)...", min_speakers, max_speakers)
     t0 = time.perf_counter()
 
-    import numpy as np
-    import subprocess as sp
-    import torch
-    from pyannote.audio import Pipeline as PyannotePipeline
-
-    # Decode audio via ffmpeg to 16kHz mono float32 — works for any format
-    # ffmpeg supports (webm, m4a, mp3, etc.) and avoids pyannote's broken
-    # torchcodec loader.
-    SAMPLE_RATE = 16000
-    cmd = ["ffmpeg", "-i", str(audio_path), "-f", "f32le", "-ac", "1",
-           "-ar", str(SAMPLE_RATE), "-loglevel", "error", "-"]
-    pcm = sp.run(cmd, capture_output=True, check=True).stdout
-    waveform = torch.from_numpy(
-        np.frombuffer(pcm, dtype=np.float32).copy()
-    ).unsqueeze(0)
-    audio_input = {"waveform": waveform, "sample_rate": SAMPLE_RATE}
-
-    def _do_diarize(device: str) -> object:
-        diarize_pipeline = PyannotePipeline.from_pretrained(
-            "pyannote/speaker-diarization-community-1",
-            token=pipeline.hf_token,
-        )
-        if device == "mps":
-            diarize_pipeline = diarize_pipeline.to(torch.device("mps"))
-        kwargs: dict = {}
-        if min_speakers is not None:
-            kwargs["min_speakers"] = min_speakers
-        if max_speakers is not None:
-            kwargs["max_speakers"] = max_speakers
-        return diarize_pipeline(audio_input, **kwargs)
-
     try:
-        dev = pipeline.diarize_device
-        if dev == "mps":
-            try:
-                diarization = _do_diarize("mps")
-            except Exception as e:
-                log.warning("Diarize on MPS failed (%s), retrying on CPU", e)
-                diarization = _do_diarize("cpu")
-        else:
-            diarization = _do_diarize("cpu")
+        speaker_turns = pipeline.diariser.diarise(
+            audio_path, min_speakers, max_speakers, on_progress,
+        )
     except Exception as e:
         hint = hint_for_pyannote_error(e)
         if hint:
@@ -350,7 +308,7 @@ def transcribe_one(
     log.info("Assigning speakers to tokens...")
     t0 = time.perf_counter()
 
-    segments = _assign_speakers(result.tokens, diarization)
+    segments = _assign_speakers(result.tokens, speaker_turns)
 
     log.info("Speaker assignment: %.1fs (%d segments)", time.perf_counter() - t0, len(segments))
     if on_stage_end:

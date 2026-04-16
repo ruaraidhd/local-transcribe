@@ -171,7 +171,7 @@ class API:
         """Run transcription batch on background thread."""
         try:
             # Load model if needed
-            if self.pipeline is None or self.pipeline.model is None:
+            if self.pipeline is None or not self.pipeline.transcriber.is_loaded:
                 self._push("status", {"message": "Loading model..."})
                 model_id = self.settings.get("model", "mlx-community/parakeet-tdt-0.6b-v2")
                 self.pipeline = load_pipeline(
@@ -238,7 +238,7 @@ class API:
                     i < total - 1
                     and not self._stop_flag
                     and self.pipeline is not None
-                    and self.pipeline.model is None
+                    and not self.pipeline.transcriber.is_loaded
                 ):
                     try:
                         self._push("status", {"message": "Reloading model..."})
