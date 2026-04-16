@@ -7,5 +7,5 @@ requires-python = ">=3.11,<3.12"
 dependencies = [
     "parakeet-mlx>=0.5",
     "pyannote-audio>=3.3",
-    "toga>=0.4",
+    "pywebview>=5.0",
 ]

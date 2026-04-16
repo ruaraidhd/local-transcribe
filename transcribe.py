@@ -11,8 +11,11 @@ import os
 import sys
 from pathlib import Path as _Path
 
+# Resolve the app's resource directory — differs between dev and PyInstaller bundle.
+_BUNDLE_DIR = _Path(getattr(sys, "_MEIPASS", _Path(__file__).parent))
+
 # Use bundled models if available (eliminates HF token requirement).
-_models_dir = _Path(__file__).parent / "models"
+_models_dir = _BUNDLE_DIR / "models"
 if _models_dir.exists():
     os.environ["HF_HOME"] = str(_models_dir)
 import time
@@ -28,7 +31,7 @@ from logging_setup import (
     setup_logging,
 )
 
-SETTINGS_PATH = Path(__file__).parent / "settings.toml"
+SETTINGS_PATH = _BUNDLE_DIR / "settings.toml"
 AUDIO_EXTS = {".wav", ".mp3", ".m4a", ".mp4", ".flac", ".ogg", ".webm", ".aac"}
 
 log = logging.getLogger("local_transcribe")
@@ -49,14 +52,19 @@ class Pipeline:
 
 
 def load_settings() -> dict:
-    if not SETTINGS_PATH.exists():
+    if SETTINGS_PATH.exists():
+        s = tomllib.loads(SETTINGS_PATH.read_text())
+    elif _models_dir.exists():
+        # Bundled mode: models are shipped, no token needed.
+        s = {}
+    else:
         sys.exit(
             f"Missing {SETTINGS_PATH.name}. "
             "Copy settings.example.toml to settings.toml and fill in your HF token."
         )
-    s = tomllib.loads(SETTINGS_PATH.read_text())
+    # HF token only required when models aren't bundled.
     token = s.get("hf_token", "").strip()
-    if not token or token.startswith("hf_YOUR"):
+    if not _models_dir.exists() and (not token or token.startswith("hf_YOUR")):
         sys.exit(f"hf_token not set in {SETTINGS_PATH.name}")
     return s
 

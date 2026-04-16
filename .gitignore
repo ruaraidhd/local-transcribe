@@ -14,3 +14,7 @@ output/
 *.ogg
 *.webm
 *.aac
+vendor/ffmpeg
+build/
+dist/
+setup.py

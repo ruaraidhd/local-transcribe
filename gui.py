@@ -5,14 +5,21 @@ import json
 import gc
 import logging
 import os
+import sys
 import threading
 import time
 from pathlib import Path
 
 # Use bundled models if available (eliminates HF token requirement).
-_models_dir = Path(__file__).parent / "models"
+_bundle_dir = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
+_models_dir = _bundle_dir / "models"
 if _models_dir.exists():
     os.environ["HF_HOME"] = str(_models_dir)
+
+# Ensure ffmpeg is on PATH — bundled binary first, then Homebrew fallback.
+_extra_paths = str(_bundle_dir) + ":/opt/homebrew/bin:/usr/local/bin"
+if str(_bundle_dir) not in os.environ.get("PATH", ""):
+    os.environ["PATH"] = _extra_paths + ":" + os.environ.get("PATH", "")
 
 import webview
 
@@ -48,11 +55,11 @@ class API:
 
     def pick_files(self):
         """Open native file dialog, return list of file paths."""
-        file_types = ("Audio Files", " ".join(f"*.{ext.lstrip('.')}" for ext in AUDIO_EXTS))
+        exts = ";".join(f"*.{ext.lstrip('.')}" for ext in AUDIO_EXTS)
         result = self.window.create_file_dialog(
             webview.FileDialog.OPEN,
             allow_multiple=True,
-            file_types=(file_types,),
+            file_types=(f"Audio files ({exts})",),
         )
         if result:
             return [str(p) for p in result]
@@ -100,6 +107,19 @@ class API:
         stem = Path(filename).stem
         desktop = Path.home() / "Desktop"
 
+        def _ts_short(seconds):
+            """HH:MM:SS (no ms)."""
+            h, rem = divmod(int(seconds), 3600)
+            m, s = divmod(rem, 60)
+            return f"{h:02d}:{m:02d}:{s:02d}"
+
+        def _ts_vtt(seconds):
+            """HH:MM:SS.mmm for VTT."""
+            h, rem = divmod(int(seconds), 3600)
+            m, s = divmod(rem, 60)
+            ms = int((seconds - int(seconds)) * 1000)
+            return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
+
         if format_type == "plain":
             out = desktop / f"{stem}_transcript.txt"
             lines, current, buf = [], None, []
@@ -122,23 +142,42 @@ class API:
             write_srt(data["segments"], out)
 
         elif format_type == "maxqda":
-            from transcribe import write_srt
-            out = desktop / f"{stem}_maxqda.srt"
-            write_srt(data["segments"], out)
-
-        elif format_type == "atlasti":
-            from transcribe import write_srt
-            out = desktop / f"{stem}_atlasti.srt"
-            write_srt(data["segments"], out)
-
-        elif format_type == "nvivo":
-            out = desktop / f"{stem}_nvivo.txt"
-            from transcribe import format_ts
+            # MAXQDA focus group format: #HH:MM:SS# timestamp, then
+            # Speaker: text, one paragraph per turn.
+            out = desktop / f"{stem}_maxqda.txt"
             lines = []
             for seg in data["segments"]:
-                ts = format_ts(seg["start"]).split(",")[0]  # HH:MM:SS without ms
-                lines.append(f"{ts}\t{seg.get('speaker', 'UNKNOWN')}")
-                lines.append(f"{seg.get('text', '').strip()}\n")
+                ts = _ts_short(seg["start"])
+                speaker = seg.get("speaker", "UNKNOWN")
+                text = seg.get("text", "").strip()
+                lines.append(f"#{ts}#\n{speaker}: {text}")
+            out.write_text("\n\n".join(lines), encoding="utf-8")
+
+        elif format_type == "atlasti":
+            # ATLAS.ti imports VTT with speaker names.
+            out = desktop / f"{stem}_atlasti.vtt"
+            lines = ["WEBVTT", ""]
+            for i, seg in enumerate(data["segments"], 1):
+                speaker = seg.get("speaker", "UNKNOWN")
+                text = seg.get("text", "").strip()
+                start = _ts_vtt(seg["start"])
+                end = _ts_vtt(seg["end"])
+                lines.append(str(i))
+                lines.append(f"{start} --> {end}")
+                lines.append(f"<v {speaker}>{text}")
+                lines.append("")
+            out.write_text("\n".join(lines), encoding="utf-8")
+
+        elif format_type == "nvivo":
+            # NVivo tab-delimited: timespan\tSpeaker\tContent
+            out = desktop / f"{stem}_nvivo.txt"
+            lines = []
+            for seg in data["segments"]:
+                start = _ts_short(seg["start"])
+                end = _ts_short(seg["end"])
+                speaker = seg.get("speaker", "UNKNOWN")
+                text = seg.get("text", "").strip()
+                lines.append(f"{start}-{end}\t{speaker}\t{text}")
             out.write_text("\n".join(lines), encoding="utf-8")
 
         else:
@@ -175,7 +214,7 @@ class API:
                 self._push("status", {"message": "Loading model..."})
                 model_id = self.settings.get("model", "mlx-community/parakeet-tdt-0.6b-v2")
                 self.pipeline = load_pipeline(
-                    self.settings["hf_token"], model_id, self.settings,
+                    self.settings.get("hf_token", ""), model_id, self.settings,
                 )
 
             speakers = int(num_speakers) if num_speakers else None
@@ -244,7 +283,7 @@ class API:
                         self._push("status", {"message": "Reloading model..."})
                         model_id = self.settings.get("model", "mlx-community/parakeet-tdt-0.6b-v2")
                         self.pipeline = load_pipeline(
-                            self.settings["hf_token"], model_id, self.settings,
+                            self.settings.get("hf_token", ""), model_id, self.settings,
                         )
                     except Exception:
                         log.exception("Failed to reload model between files")
@@ -284,7 +323,7 @@ def main():
 
     window = webview.create_window(
         "Local Transcribe",
-        url=str(Path(__file__).parent / "web" / "index.html"),
+        url=str(Path(getattr(sys, "_MEIPASS", Path(__file__).parent)) / "web" / "index.html"),
         js_api=api,
         width=800,
         height=700,
@@ -298,13 +337,19 @@ def main():
         api._push("status", {"message": "Loading model..."})
         try:
             model_id = api.settings.get("model", "mlx-community/parakeet-tdt-0.6b-v2")
-            api.pipeline = load_pipeline(api.settings["hf_token"], model_id, api.settings)
+            api.pipeline = load_pipeline(api.settings.get("hf_token", ""), model_id, api.settings)
             api._push("model_ready", {})
         except Exception as e:
             log.exception("Model load failed")
             api._push("model_error", {"error": str(e)})
 
     window.events.loaded += lambda: threading.Thread(target=on_loaded, daemon=True).start()
+
+    def on_closing():
+        log.info("Window closing — shutting down.")
+        os._exit(0)  # Force-exit; daemon threads + ML cleanup hang otherwise.
+
+    window.events.closing += on_closing
 
     webview.start()
 
