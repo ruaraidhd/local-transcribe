@@ -226,6 +226,54 @@ def test_tokens_outside_turns_inherit():
     )
 
 
+# ---------------------------------------------------------------------------
+# Edge-case tests
+# ---------------------------------------------------------------------------
+
+def test_empty_tokens():
+    """No tokens → empty segments list, no crash."""
+    result = _assign_speakers([], [])
+    assert result == []
+
+
+def test_empty_turns_but_tokens():
+    """Tokens but no speaker turns → everything assigned to 'UNKNOWN' or sensible default."""
+    from types import SimpleNamespace as S
+    tokens = [S(text="hello", start=0.0, end=1.0, duration=1.0, confidence=0.9)]
+    result = _assign_speakers(tokens, [])
+    # One segment, speaker is UNKNOWN (no turns to assign from)
+    assert len(result) == 1
+    assert result[0]["speaker"] == "UNKNOWN"
+    assert "hello" in result[0]["text"]
+
+
+def test_all_tokens_in_single_turn():
+    """All tokens fall within one speaker's turn → one segment with that speaker."""
+    from types import SimpleNamespace as S
+    tokens = [
+        S(text="hello", start=0.0, end=0.5, duration=0.5, confidence=0.9),
+        S(text=" world", start=0.6, end=1.2, duration=0.6, confidence=0.9),
+    ]
+    turns = [S(start=0.0, end=2.0, speaker="SPEAKER_00")]
+    result = _assign_speakers(tokens, turns)
+    assert len(result) == 1
+    assert result[0]["speaker"] == "SPEAKER_00"
+    assert "hello" in result[0]["text"]
+    assert "world" in result[0]["text"]
+
+
+def test_overlapping_turns_first_wins():
+    """When turns overlap, the first-listed turn covering the token's midpoint wins."""
+    from types import SimpleNamespace as S
+    tokens = [S(text="hi", start=5.0, end=5.5, duration=0.5, confidence=0.9)]
+    turns = [
+        S(start=0.0, end=10.0, speaker="SPEAKER_00"),  # first
+        S(start=4.0, end=6.0, speaker="SPEAKER_01"),   # overlaps, but listed second
+    ]
+    result = _assign_speakers(tokens, turns)
+    assert result[0]["speaker"] == "SPEAKER_00"
+
+
 def test_confidence_aggregated_geometric_mean():
     """Segment confidence equals geometric mean of token confidences (uniform → same value)."""
     conf = 0.8

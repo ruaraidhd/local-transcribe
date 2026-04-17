@@ -28,10 +28,18 @@ See [SETUP.md](SETUP.md).
 
 ```bash
 uv sync --group dev
-uv run pytest tests/ -v
+uv run pytest tests/ -v                  # all fast tests
+uv run pytest -m "not slow" -v           # skip integration tests
+uv run pytest -m slow -v                 # integration tests only (needs model weights)
 ```
 
 Property-based tests (hypothesis) cover speaker assignment invariants.
+
+### Mutation testing (optional)
+
+Run `MUTMUT=1 uv run mutmut run` to see how well the test suite catches
+mutations. Uses a deterministic hypothesis profile to avoid flakiness.
+Slow — expect 30+ min. See results with `uv run mutmut results`.
 
 ## Logs
 
