@@ -24,5 +24,5 @@ markers = [
 
 [tool.mutmut]
 paths_to_mutate = ["transcribe.py", "exports.py", "backends.py"]
-tests_dir = "tests"
-runner = "MUTMUT=1 uv run pytest tests/ -x -q --tb=no -m 'not slow'"
+tests_dir = ["tests"]
+also_copy = ["gui.py", "logging_setup.py"]
