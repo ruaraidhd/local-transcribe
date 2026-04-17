@@ -24,6 +24,15 @@ Outputs per input file: `{name}.txt` (speaker-labelled transcript),
 
 See [SETUP.md](SETUP.md).
 
+## Testing
+
+```bash
+uv sync --group dev
+uv run pytest tests/ -v
+```
+
+Property-based tests (hypothesis) cover speaker assignment invariants.
+
 ## Logs
 
 `~/Library/Logs/LocalTranscribe/transcribe.log` (rotated, 5 × 1MB). The GUI

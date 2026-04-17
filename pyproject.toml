@@ -1,6 +1,6 @@
 [project]
 name = "verbatim"
-version = "0.2.0"
+version = "0.3.0"
 description = "Verbatim — private on-device audio transcription + diarisation via parakeet-mlx"
 readme = "README.md"
 requires-python = ">=3.11,<3.12"
@@ -8,4 +8,10 @@ dependencies = [
     "parakeet-mlx>=0.5",
     "pyannote-audio>=3.3",
     "pywebview>=5.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "hypothesis>=6.0",
 ]

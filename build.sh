@@ -5,6 +5,15 @@ cd "$(dirname "$0")"
 
 echo "=== Building Verbatim ==="
 
+# Unmount any stale Verbatim volume (blocks rm -rf dist/)
+for vol in /Volumes/Verbatim*; do
+    [ -d "$vol" ] && hdiutil detach "$vol" -force 2>/dev/null || true
+done
+
+# Kill any running Verbatim instance holding files open
+pkill -f "Verbatim.app" 2>/dev/null || true
+sleep 0.5
+
 # Clean
 rm -rf dist/ build/
 
@@ -29,7 +38,7 @@ echo "App: dist/Verbatim.app ($(du -sh dist/Verbatim.app | cut -f1))"
 
 # Create DMG
 echo "Creating DMG..."
-DMG_NAME="Verbatim-0.2.0.dmg"
+DMG_NAME="Verbatim-0.3.0.dmg"
 rm -f "dist/$DMG_NAME"
 
 # Create a temporary directory with the .app and a symlink to Applications

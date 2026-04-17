@@ -34,6 +34,7 @@ from logging_setup import (
     log_startup_diagnostics,
     setup_logging,
 )
+from exports import EXPORTERS
 from transcribe import (
     AUDIO_EXTS,
     SETTINGS_PATH,
@@ -147,7 +148,11 @@ class _RangeHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             if units.strip() != "bytes":
                 return None, None
             start_s, end_s = rng.split("-", 1)
-            start = int(start_s) if start_s.strip() else 0
+            if not start_s.strip():
+                # Suffix range: bytes=-N  →  last N bytes
+                suffix = int(end_s)
+                return max(0, size - suffix), size - 1
+            start = int(start_s)
             end = int(end_s) if end_s.strip() else size - 1
             return start, min(end, size - 1)
         except Exception:
@@ -284,85 +289,12 @@ class API:
         data = self._results.get(filename)
         if not data:
             return {"error": "No transcript data"}
+        exporter = EXPORTERS.get(format_type)
+        if exporter is None:
+            return {"error": f"Unknown format: {format_type}"}
         stem = Path(filename).stem
         desktop = Path.home() / "Desktop"
-
-        def _ts_short(seconds):
-            """HH:MM:SS (no ms)."""
-            h, rem = divmod(int(seconds), 3600)
-            m, s = divmod(rem, 60)
-            return f"{h:02d}:{m:02d}:{s:02d}"
-
-        def _ts_vtt(seconds):
-            """HH:MM:SS.mmm for VTT."""
-            h, rem = divmod(int(seconds), 3600)
-            m, s = divmod(rem, 60)
-            ms = int((seconds - int(seconds)) * 1000)
-            return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
-
-        if format_type == "plain":
-            out = desktop / f"{stem}_transcript.txt"
-            lines, current, buf = [], None, []
-            for seg in data["segments"]:
-                speaker = seg.get("speaker", "UNKNOWN")
-                text = seg.get("text", "").strip()
-                if speaker != current:
-                    if buf:
-                        lines.append(f"{current}: {' '.join(buf)}")
-                        buf = []
-                    current = speaker
-                buf.append(text)
-            if buf:
-                lines.append(f"{current}: {' '.join(buf)}")
-            out.write_text("\n\n".join(lines), encoding="utf-8")
-
-        elif format_type == "srt":
-            from transcribe import write_srt
-            out = desktop / f"{stem}.srt"
-            write_srt(data["segments"], out)
-
-        elif format_type == "maxqda":
-            # MAXQDA focus group format: #HH:MM:SS# timestamp, then
-            # Speaker: text, one paragraph per turn.
-            out = desktop / f"{stem}_maxqda.txt"
-            lines = []
-            for seg in data["segments"]:
-                ts = _ts_short(seg["start"])
-                speaker = seg.get("speaker", "UNKNOWN")
-                text = seg.get("text", "").strip()
-                lines.append(f"#{ts}#\n{speaker}: {text}")
-            out.write_text("\n\n".join(lines), encoding="utf-8")
-
-        elif format_type == "atlasti":
-            # ATLAS.ti imports VTT with speaker names.
-            out = desktop / f"{stem}_atlasti.vtt"
-            lines = ["WEBVTT", ""]
-            for i, seg in enumerate(data["segments"], 1):
-                speaker = seg.get("speaker", "UNKNOWN")
-                text = seg.get("text", "").strip()
-                start = _ts_vtt(seg["start"])
-                end = _ts_vtt(seg["end"])
-                lines.append(str(i))
-                lines.append(f"{start} --> {end}")
-                lines.append(f"<v {speaker}>{text}")
-                lines.append("")
-            out.write_text("\n".join(lines), encoding="utf-8")
-
-        elif format_type == "nvivo":
-            # NVivo tab-delimited: timespan\tSpeaker\tContent
-            out = desktop / f"{stem}_nvivo.txt"
-            lines = []
-            for seg in data["segments"]:
-                start = _ts_short(seg["start"])
-                end = _ts_short(seg["end"])
-                speaker = seg.get("speaker", "UNKNOWN")
-                text = seg.get("text", "").strip()
-                lines.append(f"{start}-{end}\t{speaker}\t{text}")
-            out.write_text("\n".join(lines), encoding="utf-8")
-
-        else:
-            return {"error": f"Unknown format: {format_type}"}
-
+        out = exporter(data["segments"], stem, desktop)
         return {"path": str(out)}
 
     def pick_output_folder(self):
@@ -426,7 +358,7 @@ class API:
             "text": text,
             "overall_stars": overall_stars,
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
-            "app_version": "0.2.0",
+            "app_version": "0.3.0",
         }
 
         if include_diagnostics:
@@ -448,7 +380,7 @@ class API:
             text,
             "",
             "---",
-            "Sent from Verbatim v0.2.0",
+            "Sent from Verbatim v0.3.0",
         ]
         if include_diagnostics and "diagnostics_path" in entry:
             body_lines.append(f"Diagnostics saved to: {entry['diagnostics_path']}")

@@ -128,8 +128,8 @@ app = BUNDLE(
     info_plist={
         "CFBundleName": "Verbatim",
         "CFBundleDisplayName": "Verbatim",
-        "CFBundleVersion": "0.2.0",
-        "CFBundleShortVersionString": "0.2.0",
+        "CFBundleVersion": "0.3.0",
+        "CFBundleShortVersionString": "0.3.0",
         "LSMinimumSystemVersion": "14.0",
     },
 )
